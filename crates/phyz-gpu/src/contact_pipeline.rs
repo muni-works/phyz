@@ -35,7 +35,8 @@ pub(crate) struct ContactParams {
     /// CUDA only: 1 + the offset of the per-world friction row inside the
     /// heightfield buffer (0 = the scalar `friction` for every world).
     pub(crate) world_fric_base1: u32,
-    pub(crate) _pad_plane2: f32,
+    /// CUDA only: impulse-sweep convergence tolerance (0 = fixed sweeps).
+    pub(crate) sweep_tol: f32,
     // Heightfield terrain header; hf_nx == 0 means "flat plane at
     // ground_height", the pre-heightfield behaviour.
     pub(crate) hf_nx: u32,
@@ -85,7 +86,7 @@ impl ContactParams {
                 as u32,
             world_hf_stride: 0,
             world_fric_base1: 0,
-            _pad_plane2: 0.0,
+            sweep_tol: 0.0,
             hf_nx: heightfield.map_or(0, |h| h.nx as u32),
             hf_ny: heightfield.map_or(0, |h| h.ny as u32),
             hf_ox: heightfield.map_or(0.0, |h| h.origin.x as f32),

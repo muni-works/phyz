@@ -452,6 +452,7 @@ pub trait KernelBackend {
         _qdd: &mut Self::Buffer,
         _ext_forces: &mut Self::Buffer,
         _contact_state: &mut Self::Buffer,
+        _sweep_stats: &mut Self::Buffer,
     ) -> Result<(), String> {
         Err("this backend has no fused impulse step".into())
     }
@@ -616,6 +617,9 @@ pub struct BatchSim<B: KernelBackend> {
     qdd: B::Buffer,
     ext_forces: B::Buffer,
     contact_state: B::Buffer,
+    /// Per world: total impulse sweeps run and the most in one step, since
+    /// the last [`BatchSim::reset_sweep_stats`] (fused impulse step only).
+    sweep_stats: B::Buffer,
     contact: Option<ContactPass<B>>,
     pd: Option<PdPass<B>>,
     /// FK readout buffer, `[nworld][nbodies][XF_STRIDE]`.
@@ -779,6 +783,8 @@ impl<B: KernelBackend> BatchSim<B> {
         let qdd = backend.alloc((nworld * model.nv).max(1))?;
         let ext_forces = backend.alloc((nworld * nb * 6).max(1))?;
         let contact_state = backend.alloc((nworld * nb * CONTACT_STATE_STRIDE).max(1))?;
+        let mut sweep_stats = backend.alloc((2 * nworld).max(1))?;
+        backend.upload(&mut sweep_stats, &vec![0.0f32; (2 * nworld).max(1)])?;
         Ok(Self {
             backend,
             model,
@@ -790,6 +796,7 @@ impl<B: KernelBackend> BatchSim<B> {
             qdd,
             ext_forces,
             contact_state,
+            sweep_stats,
             contact: None,
             pd: None,
             kin: None,
@@ -1040,6 +1047,31 @@ impl<B: KernelBackend> BatchSim<B> {
         self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
         self.invalidate_graph();
         Ok(())
+    }
+
+    /// Set the impulse-sweep convergence tolerance: a world's sweeps stop
+    /// once no contact impulse moved by more than `tol` times the world's
+    /// largest normal impulse in one sweep, with [`Self::contact_sweeps`]
+    /// as the cap. 0 restores fixed sweeps (the default). Fused impulse
+    /// step only. Requires contact enabled.
+    pub fn set_sweep_tolerance(&mut self, tol: f64) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        c.params.sweep_tol = tol as f32;
+        self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Per world `(total sweeps, max sweeps in one step)` since the last
+    /// [`Self::reset_sweep_stats`].
+    pub fn readback_sweep_stats(&self) -> Result<Vec<(f32, f32)>, String> {
+        let d = self.backend.download(&self.sweep_stats)?;
+        Ok(d.chunks(2).take(self.nworld).map(|c| (c[0], c[1])).collect())
+    }
+
+    /// Zero the sweep counters.
+    pub fn reset_sweep_stats(&mut self) -> Result<(), String> {
+        self.backend.upload(&mut self.sweep_stats, &vec![0.0f32; (2 * self.nworld).max(1)])
     }
 
     /// The backend the kernels run on.
@@ -1413,6 +1445,7 @@ impl<B: KernelBackend> BatchSim<B> {
             &mut self.qdd,
             &mut self.ext_forces,
             &mut self.contact_state,
+            &mut self.sweep_stats,
         )
     }
 
