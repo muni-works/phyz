@@ -460,6 +460,12 @@ PHYZ_DEV bool invert_small(float* m, u32 n) {
 
 // Body table access
 PHYZ_DEV float bf(const float* bodies, u32 bi, u32 off) { return bodies[bi * BODY_STRIDE + off]; }
+// Per-world body tables: body 0's slot 35 holds the world stride in floats
+// (0 = one table shared by every world, the default `pack_bodies` writes).
+// Applied once, at the leaf passes, so every helper below sees its world's row.
+PHYZ_DEV const float* world_bodies(const float* bodies, u32 world_idx) {
+    return bodies + (unsigned long long)world_idx * f_as_u(bodies[35u]);
+}
 PHYZ_DEV i32 body_parent(const float* bodies, u32 bi) { return f_as_i(bodies[bi * BODY_STRIDE + 0u]); }
 PHYZ_DEV u32 body_jtype(const float* bodies, u32 bi) { return f_as_u(bodies[bi * BODY_STRIDE + 1u]); }
 PHYZ_DEV u32 body_qoff(const float* bodies, u32 bi) { return f_as_u(bodies[bi * BODY_STRIDE + 2u]); }
@@ -560,6 +566,8 @@ typedef struct {
     u32 nworld, nbodies, nv;
     float ground_height, dt, friction;
     u32 nplanes, plane_base;
+    // Per-world terrain/friction (0 = shared). See ContactParams.
+    u32 hf_wstride, fric_base1;
     u32 hf_nx, hf_ny;
     float hf_ox, hf_oy, hf_oz, hf_cell;
     u32 solve_mode;
@@ -572,7 +580,10 @@ PHYZ_DEV cparams_t decode_cparams(const float* p) {
     c.nworld = f_as_u(p[0]); c.nbodies = f_as_u(p[1]); c.nv = f_as_u(p[2]);
     c.ground_height = p[3]; c.dt = p[4]; c.friction = p[5];
     c.nplanes = f_as_u(p[6]); c.plane_base = f_as_u(p[7]);
-    // p[8..11] reserved (were the single plane's offset / depth / half-extents)
+    // p[8] per-world heightfield stride in nodes (0 = one shared field);
+    // p[9] 1 + offset of the per-world friction row in the hf buffer (0 = off);
+    // p[10] reserved.
+    c.hf_wstride = f_as_u(p[8]); c.fric_base1 = f_as_u(p[9]);
     c.hf_nx = f_as_u(p[11]); c.hf_ny = f_as_u(p[12]);
     c.hf_ox = p[13]; c.hf_oy = p[14]; c.hf_oz = p[15]; c.hf_cell = p[16];
     c.solve_mode = f_as_u(p[17]);
@@ -1155,6 +1166,9 @@ PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
                                FC* fc, u32 fk_mode) {
     cparams_t cp = decode_cparams(cparams);
     if (world_idx >= cp.nworld) return;
+    if (cp.fric_base1 != 0u) cp.friction = hf_heights[cp.fric_base1 - 1u + world_idx];
+    bodies = world_bodies(bodies, world_idx);
+    hf_heights += (unsigned long long)world_idx * cp.hf_wstride;
 
     u32 nb = cp.nbodies;
     u32 q_base = world_idx * cp.nv;
@@ -1865,6 +1879,7 @@ PHYZ_DEV void aba_thread_c(u32 world_idx, u32 nworld, u32 nv, float dt, u32 nbod
                            const float* ctrl, float* qdd, const float* ext_forces,
                            KC* kc, u32 mode) {
     if (world_idx >= nworld) return;
+    bodies = world_bodies(bodies, world_idx);
 
     u32 nb = nbodies;
     u32 q_base = world_idx * nv;  // nq == nv: ball/free use exponential coordinates
@@ -2155,6 +2170,7 @@ PHYZ_DEV void integrate_thread(u32 idx, u32 nworld, u32 nv, float dt, u32 nbodie
 
     u32 world_idx = idx / nb;
     u32 body_idx = idx % nb;
+    bodies = world_bodies(bodies, world_idx);
 
     u32 jtype = body_jtype(bodies, body_idx);
     u32 ndof = joint_ndof(jtype);
@@ -2265,6 +2281,7 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
 PHYZ_DEV void fk_thread(u32 world_idx, u32 nworld, u32 nv, u32 nbodies,
                         const float* bodies, const float* q, const float* v, float* xforms) {
     if (world_idx >= nworld) return;
+    bodies = world_bodies(bodies, world_idx);
     u32 nb = nbodies;
     r9 w_rot[MAX_BODIES];
     v3 w_pos[MAX_BODIES];

@@ -29,8 +29,12 @@ pub(crate) struct ContactParams {
     /// the pass needs no extra storage binding — the WebGPU baseline allows
     /// eight per stage and this pass already binds eight.
     pub(crate) plane_base: u32,
-    pub(crate) _pad_plane0: f32,
-    pub(crate) _pad_plane1: f32,
+    /// CUDA only: per-world heightfield stride in nodes (0 = one field
+    /// shared by every world). WGSL reads this slot as padding.
+    pub(crate) world_hf_stride: u32,
+    /// CUDA only: 1 + the offset of the per-world friction row inside the
+    /// heightfield buffer (0 = the scalar `friction` for every world).
+    pub(crate) world_fric_base1: u32,
     pub(crate) _pad_plane2: f32,
     // Heightfield terrain header; hf_nx == 0 means "flat plane at
     // ground_height", the pre-heightfield behaviour.
@@ -79,8 +83,8 @@ impl ContactParams {
             nplanes: planes.len() as u32,
             plane_base: (crate::layout::geometry_instance_count(model) * crate::layout::GEOM_STRIDE)
                 as u32,
-            _pad_plane0: 0.0,
-            _pad_plane1: 0.0,
+            world_hf_stride: 0,
+            world_fric_base1: 0,
             _pad_plane2: 0.0,
             hf_nx: heightfield.map_or(0, |h| h.nx as u32),
             hf_ny: heightfield.map_or(0, |h| h.ny as u32),
