@@ -108,7 +108,14 @@ fn batch(recs: &[Rec], copies: usize, order: u32) -> ConvexBatch {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let recs = read(args.get(1).expect("usage: convex_bench DUMP.bin [copies...]"));
+    let mut recs = read(args.get(1).expect("usage: convex_bench DUMP.bin [copies...]"));
+    // CVX_DROP_ABOVE=N: leave out problems the CPU needed more than N
+    // iterations for — the launch time without the tail.
+    if let Some(cut) = std::env::var("CVX_DROP_ABOVE").ok().and_then(|v| v.parse::<u32>().ok()) {
+        let before = recs.len();
+        recs.retain(|r| r.iters <= cut);
+        println!("CVX_DROP_ABOVE={cut}: kept {}/{before} problems", recs.len());
+    }
     let copies: Vec<usize> = if args.len() > 2 {
         args[2..].iter().map(|s| s.parse().unwrap()).collect()
     } else {
