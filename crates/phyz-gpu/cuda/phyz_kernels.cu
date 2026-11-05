@@ -568,6 +568,9 @@ typedef struct {
     u32 nplanes, plane_base;
     // Per-world terrain/friction (0 = shared). See ContactParams.
     u32 hf_wstride, fric_base1;
+    // Impulse sweeps stop once the relative impulse change is below this
+    // (0 = always run the full sweep count).
+    float sweep_tol;
     u32 hf_nx, hf_ny;
     float hf_ox, hf_oy, hf_oz, hf_cell;
     u32 solve_mode;
@@ -582,8 +585,8 @@ PHYZ_DEV cparams_t decode_cparams(const float* p) {
     c.nplanes = f_as_u(p[6]); c.plane_base = f_as_u(p[7]);
     // p[8] per-world heightfield stride in nodes (0 = one shared field);
     // p[9] 1 + offset of the per-world friction row in the hf buffer (0 = off);
-    // p[10] reserved.
-    c.hf_wstride = f_as_u(p[8]); c.fric_base1 = f_as_u(p[9]);
+    // p[10] the impulse-sweep convergence tolerance (0 = fixed sweeps).
+    c.hf_wstride = f_as_u(p[8]); c.fric_base1 = f_as_u(p[9]); c.sweep_tol = p[10];
     c.hf_nx = f_as_u(p[11]); c.hf_ny = f_as_u(p[12]);
     c.hf_ox = p[13]; c.hf_oy = p[14]; c.hf_oz = p[15]; c.hf_cell = p[16];
     c.solve_mode = f_as_u(p[17]);
@@ -1158,14 +1161,14 @@ PHYZ_DEV void fk_world(const float* bodies, u32 nb, u32 nv,
 }
 
 template <class FC>
-PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
+PHYZ_DEV float contact_thread_c(u32 world_idx, const float* cparams,
                                const float* bodies, const float* geometry,
                                const float* q, const float* v,
                                float* ext_forces, float* contact_state,
                                const float* hf_heights, const float* qdd,
                                FC* fc, u32 fk_mode) {
     cparams_t cp = decode_cparams(cparams);
-    if (world_idx >= cp.nworld) return;
+    if (world_idx >= cp.nworld) return 0.0f;
     if (cp.fric_base1 != 0u) cp.friction = hf_heights[cp.fric_base1 - 1u + world_idx];
     bodies = world_bodies(bodies, world_idx);
     hf_heights += (unsigned long long)world_idx * cp.hf_wstride;
@@ -1175,6 +1178,9 @@ PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
     u32 v_base = world_idx * cp.nv;
     u32 solve_mode = cp.solve_mode;
     float dt = cp.dt;
+    // Impulse mode: largest per-slot impulse change this sweep, and the
+    // largest impulse — their ratio is the convergence measure.
+    float cv_move = 0.0f, cv_max = 0.0f;
 
     // Clear external forces for this env
     u32 ef_env_base = world_idx * nb * 6u;
@@ -1332,6 +1338,8 @@ PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
                     tu *= sc; tw *= sc;
                 }
 
+                cv_move = fmax_(cv_move, fmax_(fabsf(fn_new - f_c.x), fmax_(fabsf(tu - f_c.y), fabsf(tw - f_c.z))));
+                cv_max = fmax_(cv_max, fn_new);
                 contact_state[slot] = fn_new;
                 contact_state[slot + 1u] = tu;
                 contact_state[slot + 2u] = tw;
@@ -1675,6 +1683,8 @@ PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
                     ptu *= psc; ptw *= psc;
                 }
 
+                cv_move = fmax_(cv_move, fmax_(fabsf(nf - pf.x), fmax_(fabsf(ptu - pf.y), fabsf(ptw - pf.z))));
+                cv_max = fmax_(cv_max, nf);
                 contact_state[pslot] = nf;
                 contact_state[pslot + 1u] = ptu;
                 contact_state[pslot + 2u] = ptw;
@@ -1724,6 +1734,7 @@ PHYZ_DEV void contact_thread_c(u32 world_idx, const float* cparams,
         }
     }
     }
+    return cv_move / fmax_(cv_max, 1e-12f);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2239,10 +2250,11 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
                                   const float* cparams, const float* bodies,
                                   const float* geometry, const float* hf_heights,
                                   float* q, float* v, float* ctrl, float* qdd,
-                                  float* ext_forces, float* contact_state) {
+                                  float* ext_forces, float* contact_state, float* sweep_stats) {
     if (world_idx >= nworld) return;
     aba_cache_t kc;
     fk_cache_t fc;
+    float tol = cparams[10];
     for (u32 s = 0; s < nsteps; s++) {
         if (has_pd != 0u)
             for (u32 d = 0; d < n_dofs; d++)
@@ -2251,13 +2263,20 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
 
         aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
                      bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_BUILD);
+        u32 used = 0;
         for (u32 w = 0; w < sweeps; w++) {
-            contact_thread_c(world_idx, cparams, bodies, geometry, q, v,
-                             ext_forces, contact_state, hf_heights, qdd, &fc,
-                             w == 0u ? PHYZ_FK_BUILD : PHYZ_FK_REUSE);
+            float mv = contact_thread_c(world_idx, cparams, bodies, geometry, q, v,
+                                        ext_forces, contact_state, hf_heights, qdd, &fc,
+                                        w == 0u ? PHYZ_FK_BUILD : PHYZ_FK_REUSE);
             aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
                          bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_REUSE);
+            used = w + 1u;
+            // Converged: this sweep moved no impulse by more than `tol` of
+            // the largest. Its ABA has already run, so qdd carries it.
+            if (tol > 0.0f && mv <= tol) break;
         }
+        sweep_stats[world_idx * 2u] += (float)used;
+        sweep_stats[world_idx * 2u + 1u] = fmax_(sweep_stats[world_idx * 2u + 1u], (float)used);
 
         for (u32 b = 0; b < nbodies; b++)
             integrate_thread(world_idx * nbodies + b, nworld, nv, dt, nbodies,
@@ -2690,11 +2709,11 @@ extern "C" __global__ void phyz_step_impulse(u32 nworld, u32 nq, u32 nv, u32 n_d
                                             const float* cparams, const float* bodies,
                                             const float* geometry, const float* hf_heights,
                                             float* q, float* v, float* ctrl, float* qdd,
-                                            float* ext_forces, float* contact_state) {
+                                            float* ext_forces, float* contact_state, float* sweep_stats) {
     step_impulse_thread(blockIdx.x * blockDim.x + threadIdx.x, nworld, nq, nv, n_dofs,
                         has_pd, dt, nbodies, gx, gy, gz, sweeps, nsteps,
                         pd_dofs, targets, tau_ff, has_tau, cparams, bodies, geometry,
-                        hf_heights, q, v, ctrl, qdd, ext_forces, contact_state);
+                        hf_heights, q, v, ctrl, qdd, ext_forces, contact_state, sweep_stats);
 }
 
 #define PHYZ_ABA_ENTRY(NAME, MODE)                                              \
@@ -2800,12 +2819,12 @@ extern "C" void phyz_host_step_impulse(u32 n_threads, u32 nworld, u32 nq, u32 nv
                                       const float* cparams, const float* bodies,
                                       const float* geometry, const float* hf_heights,
                                       float* q, float* v, float* ctrl, float* qdd,
-                                      float* ext_forces, float* contact_state) {
+                                      float* ext_forces, float* contact_state, float* sweep_stats) {
     for (u32 t = 0; t < n_threads; t++)
         step_impulse_thread(t, nworld, nq, nv, n_dofs, has_pd, dt, nbodies, gx, gy, gz,
                             sweeps, nsteps, pd_dofs, targets, tau_ff, has_tau, cparams,
                             bodies, geometry, hf_heights, q, v, ctrl, qdd, ext_forces,
-                            contact_state);
+                            contact_state, sweep_stats);
 }
 
 extern "C" void phyz_host_aba_c(u32 n_threads, u32 nworld, u32 nv, float dt, u32 nbodies,

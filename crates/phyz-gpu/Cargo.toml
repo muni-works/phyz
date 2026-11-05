@@ -71,3 +71,7 @@ required-features = ["cuda"]
 [[example]]
 name = "cuda_impulse_roofline"
 required-features = ["cuda"]
+
+[[example]]
+name = "convex_bench"
+required-features = ["cuda"]
