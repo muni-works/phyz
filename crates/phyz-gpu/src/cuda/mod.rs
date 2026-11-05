@@ -510,6 +510,12 @@ struct ContactPass<B: KernelBackend> {
     /// Node capacity of `hf_buf`; `set_heightfield` may not outgrow it.
     hf_capacity: usize,
     collidable_bodies: usize,
+    /// The shared field's nodes (what `hf_buf` holds without per-world terrain).
+    shared_hf: Vec<f32>,
+    /// Per-world terrain: `nworld` fields of `stride` nodes, concatenated.
+    world_hf: Option<(usize, Vec<f32>)>,
+    /// Per-world contact friction, one per world.
+    world_fric: Option<Vec<f32>>,
 }
 
 struct PdPass<B: KernelBackend> {
@@ -911,10 +917,126 @@ impl<B: KernelBackend> BatchSim<B> {
                 self.model.nv
             ));
         }
-        self.backend
-            .upload(&mut self.bodies, &pack_bodies(&model))?;
+        // Fresh (shared-width) storage: a previous `set_world_models` may
+        // have widened the table to one row per world.
+        let data = pack_bodies(&model);
+        self.bodies = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut self.bodies, &data)?;
         self.model = model;
         // `dt` and gravity are baked into the ABA launch arguments.
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Give every world its own body table: masses, centres of mass,
+    /// inertias, joint placements, damping and armature may all differ per
+    /// world — what per-world domain randomisation of one robot needs.
+    ///
+    /// `models[w]` must have this simulator's shape (bodies, `nq`, `nv`, joint
+    /// types and geometry slices); `dt` and gravity come from the simulator's
+    /// own model and must match. [`Self::set_model`] returns to one shared
+    /// table. Physics for world `w` is then bit-identical to a simulator
+    /// built from `models[w]` alone.
+    pub fn set_world_models(&mut self, models: &[Model]) -> Result<(), String> {
+        if models.len() != self.nworld {
+            return Err(format!("set_world_models: {} models for {} worlds", models.len(), self.nworld));
+        }
+        let shared = pack_bodies(&self.model);
+        let stride = shared.len();
+        let mut data = Vec::with_capacity(stride * self.nworld);
+        for (w, m) in models.iter().enumerate() {
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
+                return Err(format!("set_world_models: world {w} has a different shape"));
+            }
+            if m.dt != self.model.dt || m.gravity != self.model.gravity {
+                return Err(format!("set_world_models: world {w} differs in dt or gravity"));
+            }
+            let row = pack_bodies(m);
+            // Structure (parent, joint type, offsets, geometry slices) is
+            // compiled into the shared kernels' assumptions; refuse a mismatch.
+            for b in 0..self.model.nbodies() {
+                let o = b * crate::layout::BODY_STRIDE;
+                for k in [0usize, 1, 2, 3, 33, 34] {
+                    if row[o + k].to_bits() != shared[o + k].to_bits() {
+                        return Err(format!("set_world_models: world {w} body {b} differs in structure (slot {k})"));
+                    }
+                }
+            }
+            data.extend_from_slice(&row);
+        }
+        // Body 0's padding slot carries the per-world stride (the kernels'
+        // `world_bodies`); 0 there means shared.
+        for w in 0..self.nworld {
+            data[w * stride + 35] = f32::from_bits(stride as u32);
+        }
+        self.bodies = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut self.bodies, &data)?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Per-world contact friction (one coefficient per world), replacing the
+    /// scalar from `enable_contact_*`. Requires contact to be enabled.
+    pub fn set_world_friction(&mut self, friction: &[f64]) -> Result<(), String> {
+        if friction.len() != self.nworld {
+            return Err(format!("set_world_friction: {} values for {} worlds", friction.len(), self.nworld));
+        }
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        c.world_fric = Some(friction.iter().map(|&f| f as f32).collect());
+        self.upload_world_terrain()
+    }
+
+    /// Per-world heightfields: same grid (`nx`, `ny`, origin, cell) for every
+    /// world, different heights. Requires contact enabled over a heightfield
+    /// of that grid. [`Self::set_heightfield`] returns to one shared field.
+    pub fn set_world_heightfields(&mut self, fields: &[Heightfield]) -> Result<(), String> {
+        if fields.len() != self.nworld {
+            return Err(format!("set_world_heightfields: {} fields for {} worlds", fields.len(), self.nworld));
+        }
+        let c = self.contact.as_mut().ok_or("contact not enabled — call enable_contact_terrain first")?;
+        let p = &c.params;
+        let stride = fields[0].heights.len();
+        let mut data = Vec::with_capacity(stride * fields.len());
+        for (w, h) in fields.iter().enumerate() {
+            validate_heightfield(h)?;
+            let same = h.nx as u32 == p.hf_nx
+                && h.ny as u32 == p.hf_ny
+                && h.origin.x as f32 == p.hf_ox
+                && h.origin.y as f32 == p.hf_oy
+                && h.origin.z as f32 == p.hf_oz
+                && h.cell as f32 == p.hf_cell;
+            if !same || h.heights.len() != stride {
+                return Err(format!("set_world_heightfields: world {w}'s grid differs from the enabled heightfield's"));
+            }
+            data.extend_from_slice(&h.heights);
+        }
+        c.world_hf = Some((stride, data));
+        self.upload_world_terrain()
+    }
+
+    /// Rebuild the heightfield buffer: terrain nodes (shared, or one field
+    /// per world), then the per-world friction row if any.
+    fn upload_world_terrain(&mut self) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        let mut data = match &c.world_hf {
+            Some((_, d)) => d.clone(),
+            None => c.shared_hf.clone(),
+        };
+        if data.is_empty() {
+            data.push(0.0);
+        }
+        c.params.world_hf_stride = c.world_hf.as_ref().map_or(0, |(s, _)| *s as u32);
+        c.params.world_fric_base1 = match &c.world_fric {
+            Some(f) => {
+                let base = data.len() as u32 + 1;
+                data.extend_from_slice(f);
+                base
+            }
+            None => 0,
+        };
+        c.hf_buf = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut c.hf_buf, &data)?;
+        self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
         self.invalidate_graph();
         Ok(())
     }
@@ -1057,6 +1179,9 @@ impl<B: KernelBackend> BatchSim<B> {
             hf_buf,
             hf_capacity,
             collidable_bodies: collidable,
+            shared_hf: heightfield.map_or(Vec::new(), |h| h.heights.clone()),
+            world_hf: None,
+            world_fric: None,
         });
         // Fresh geometry / params / heightfield buffers, and possibly a
         // different pass count (penalty vs impulse).
@@ -1081,6 +1206,11 @@ impl<B: KernelBackend> BatchSim<B> {
             ));
         }
         c.params.set_heightfield(hf);
+        c.shared_hf = hf.heights.clone();
+        if c.world_hf.is_some() || c.world_fric.is_some() {
+            c.world_hf = None;
+            return self.upload_world_terrain();
+        }
         self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
         self.backend.upload(&mut c.hf_buf, &hf.heights)
     }
