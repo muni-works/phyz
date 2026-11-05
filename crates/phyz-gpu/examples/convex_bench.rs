@@ -87,11 +87,20 @@ fn read(path: &str) -> Vec<Rec> {
         .collect()
 }
 
-fn batch(recs: &[Rec], copies: usize) -> ConvexBatch {
+/// Tile `recs` to `copies` problems, then order them: 0 = as recorded,
+/// 1 = by contact count (known before the solve — the deployable sort),
+/// 2 = by the CPU's iteration count (an oracle: the ceiling of any bucketing).
+fn batch(recs: &[Rec], copies: usize, order: u32) -> ConvexBatch {
     let nmax = recs.iter().map(|r| r.n).max().unwrap_or(1);
+    let mut idx: Vec<usize> = (0..copies).map(|i| i % recs.len()).collect();
+    match order {
+        1 => idx.sort_by_key(|&i| recs[i].n),
+        2 => idx.sort_by_key(|&i| recs[i].iters),
+        _ => {}
+    }
     let mut b = ConvexBatch::new(nmax);
-    for i in 0..copies {
-        let r = &recs[i % recs.len()];
+    for i in idx {
+        let r = &recs[i];
         b.push(&r.a, &r.b, &r.rows, &r.seed);
     }
     b
@@ -117,7 +126,7 @@ fn main() {
     let dev = CudaConvex::new(0).expect("CUDA");
 
     // 1. Parity.
-    let mut b = batch(&recs, recs.len());
+    let mut b = batch(&recs, recs.len(), 0);
     let (st, _) = dev.solve(&cfg, &mut b, 64).expect("solve");
     let (mut exact, mut worst, mut it_ok) = (0usize, 0.0f64, 0usize);
     for (p, r) in recs.iter().enumerate() {
@@ -175,23 +184,38 @@ fn main() {
     let cpu = t.elapsed().as_secs_f64() / probs.len() as f64;
     println!("cpu solve_contacts_warm: {:.2} us/solve (1 thread)", cpu * 1e6);
 
-    // 2. Cost.
+    // The tail: the CPU's iteration counts over the recorded set.
+    let mut it: Vec<u32> = recs.iter().map(|r| r.iters).collect();
+    it.sort_unstable();
+    let q = |f: f64| it[((it.len() - 1) as f64 * f) as usize];
+    let capped = it.iter().filter(|&&x| x >= cfg.max_iterations).count();
+    println!(
+        "iterations: p50 {} p90 {} p99 {} max {}; {capped} at the {} cap; mean {:.0}",
+        q(0.5), q(0.9), q(0.99), it[it.len() - 1], cfg.max_iterations,
+        it.iter().map(|&x| x as f64).sum::<f64>() / it.len() as f64
+    );
+
+    // 2. Cost, and the walk-trainer projection: one iteration solves
+    // `worlds x 24 policy steps x 10 substeps`, one launch per substep.
+    const LAUNCHES_PER_ITER: f64 = 240.0;
     for &c in &copies {
-        for block in [32u32, 64, 128] {
-            let mut b = batch(&recs, c);
+        for (order, name) in [(0u32, "recorded"), (1, "by-n"), (2, "by-iters(oracle)")] {
+            let block = 64u32;
+            let mut b = batch(&recs, c, order);
             let _ = dev.solve(&cfg, &mut b, block).expect("warm-up");
             let mut best = f64::MAX;
             for _ in 0..3 {
-                let mut b = batch(&recs, c);
+                let mut b = batch(&recs, c, order);
                 let (_, s) = dev.solve(&cfg, &mut b, block).expect("solve");
                 best = best.min(s);
             }
             println!(
-                "device {c:>6} solves, block {block:>3}: {:8.3} ms/launch  {:7.3} us/solve  {:.2e} solves/s  (= {:.0} CPU threads)",
+                "device {c:>6} worlds {name:<17} {:8.3} ms/launch {:7.3} us/solve {:.2e} solves/s  -> {:6.1} s/iter solve-only  (cpu 24 threads: {:6.1} s)",
                 best * 1e3,
                 best / c as f64 * 1e6,
                 c as f64 / best,
-                cpu * c as f64 / best
+                best * LAUNCHES_PER_ITER,
+                cpu * c as f64 * LAUNCHES_PER_ITER / 24.0
             );
         }
     }
