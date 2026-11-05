@@ -46,6 +46,7 @@ use crate::policy_pipeline::{
 };
 use phyz_model::{Heightfield, Model, State};
 
+pub mod convex;
 #[cfg(feature = "cuda-host")]
 pub mod host;
 #[cfg(feature = "cuda")]
