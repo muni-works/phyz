@@ -102,3 +102,14 @@ fn armature_is_reported_as_unmodelled() {
         "ant declares armature; it must be visible to callers"
     );
 }
+
+#[test]
+fn unitree_g1_23dof() {
+    let m = load("unitree_g1/g1_23dof.xml");
+    assert_eq!(m.nv, 29, "6 free + 23 hinge");
+    assert_eq!(m.actuators.len(), 23);
+    let mass: f64 = m.bodies.iter().map(|b| b.inertia.mass).sum();
+    // Unitree's authored inertials sum to ~33.3 kg for the 23-DOF rev 1.0.
+    assert!((30.0..37.0).contains(&mass), "total mass {mass}");
+    assert!(m.joints.iter().filter(|j| j.armature > 0.0).count() >= 23, "armature is load-bearing");
+}
