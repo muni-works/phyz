@@ -706,6 +706,37 @@ PHYZ_DEV float contact_eff_mass(const float* bodies, u32 bidx, v3 r, v3 u) {
     return 1.0f / (1.0f / m + ang);
 }
 
+
+// phyz_contact::convex::disc_block_step in f64: minimise the 2x2 tangential
+// block's quadratic on the friction disc |t| = limit (Newton on the
+// multiplier), for a sliding contact whose tangents are coupled.
+PHYZ_DEV void cvx_disc_step(double m00, double m01, double m10, double m11,
+                            double r0, double r1, double limit, double* tu, double* tw) {
+    double k = 0.0, t0, t1;
+#define CVX_DSOLVE(KK, A0, A1, O0, O1) { double a_ = m00 + (KK), d_ = m11 + (KK); \
+        double det_ = a_ * d_ - m01 * m10; O0 = (d_ * (A0) - m01 * (A1)) / det_; \
+        O1 = (a_ * (A1) - m10 * (A0)) / det_; }
+    CVX_DSOLVE(k, -r0, -r1, t0, t1);
+    for (u32 it = 0; it < 60u; it++) {
+        double nrm = sqrt(t0 * t0 + t1 * t1);
+        if (fabs(nrm - limit) <= 1e-14 * (1.0 + limit)) break;
+        double s0, s1;
+        CVX_DSOLVE(k, t0, t1, s0, s1);
+        double dn = -(t0 * s0 + t1 * s1) / nrm;
+        double phi = 1.0 / nrm - 1.0 / limit;
+        double dphi = -dn / (nrm * nrm);
+        double nx = k - phi / dphi;
+        if (nx < 0.0) nx = 0.0;
+        if (nx == k) break;
+        k = nx;
+        CVX_DSOLVE(k, -r0, -r1, t0, t1);
+    }
+#undef CVX_DSOLVE
+    double nrm = sqrt(t0 * t0 + t1 * t1);
+    double sc = nrm > 0.0 ? limit / nrm : 0.0;
+    *tu = t0 * sc; *tw = t1 * sc;
+}
+
 // Explicit-damper bound: m_eff/dt. Explicit-spring bound: 4 m_eff/dt^2.
 PHYZ_DEV float max_damping(float m_eff, float dt) { return m_eff / fmax_(dt, 1e-9f); }
 PHYZ_DEV float max_stiffness(float m_eff, float dt) {
@@ -1171,7 +1202,7 @@ PHYZ_DEV float contact_thread_c(u32 world_idx, const float* cparams,
                                const float* q, const float* v,
                                float* ext_forces, float* contact_state,
                                const float* hf_heights, const float* qdd,
-                               FC* fc, u32 fk_mode) {
+                               FC* fc, u32 fk_mode, const float* fresp = (const float*)0) {
     cparams_t cp = decode_cparams(cparams);
     if (world_idx >= cp.nworld) return 0.0f;
     if (cp.fric_base1 != 0u) cp.friction = hf_heights[cp.fric_base1 - 1u + world_idx];
@@ -1326,8 +1357,31 @@ PHYZ_DEV float contact_thread_c(u32 world_idx, const float* cparams,
                 dk[k] = (double)fmin_(fmax_(d_imp, 1e-6f), 1.0f);
                 bias_k[k] = (double)(d_imp * cp.solref_erp * fmax_(pen, 0.0f) / fmax_(dt, 1e-9f));
             }
-#define CVX_W(K, A, J, B) ((double)v3_dot(dir[K][A], dir[J][B]) / mass + \
-                           (double)v3_dot(dir[K][A], cross3(ang[J][B], v3_sub(sup[K], com))))
+            // Leg-coupled response when the step probed one for this body:
+            // R6 maps a body-frame wrench (torque, force) about the origin to
+            // the body's spatial velocity change (omega, v) per unit impulse.
+            bool coupled = fresp != (const float*)0 && fresp[i * 37u] > 0.5f;
+            v3 uw[MAX_PTS][3], uv[MAX_PTS][3];
+            if (coupled) {
+                const float* R = fresp + i * 37u + 1u;
+                for (u32 j = 0; j < n_sel; j++)
+                    for (u32 b = 0; b < 3u; b++) {
+                        v3 t = cross3(sup[j], dir[j][b]), fo_ = dir[j][b];
+                        float w6[6] = {t.x, t.y, t.z, fo_.x, fo_.y, fo_.z};
+                        float o6[6];
+                        for (u32 r = 0; r < 6u; r++) {
+                            float acc = 0.0f;
+                            for (u32 c = 0; c < 6u; c++) acc += R[r * 6u + c] * w6[c];
+                            o6[r] = acc;
+                        }
+                        uw[j][b] = v3_(o6[0], o6[1], o6[2]);
+                        uv[j][b] = v3_(o6[3], o6[4], o6[5]);
+                    }
+            }
+#define CVX_W(K, A, J, B) (coupled \
+    ? (double)v3_dot(dir[K][A], v3_add(uv[J][B], cross3(uw[J][B], sup[K]))) \
+    : ((double)v3_dot(dir[K][A], dir[J][B]) / mass + \
+       (double)v3_dot(dir[K][A], cross3(ang[J][B], v3_sub(sup[K], com)))))
             // Free velocity: the current one less the current impulses' own
             // (local) effect, so the inner solve sees a fixed problem.
             double bfree[MAX_PTS][3];
@@ -1367,7 +1421,9 @@ PHYZ_DEV float contact_thread_c(u32 world_idx, const float* cparams,
                         tw = -(B[1][1] * rw - B[2][1] * ru) / det;
                     }
                     double lim = mu * fn, tn = sqrt(tu * tu + tw * tw);
-                    if (tn > lim) { double sc = tn > 0.0 ? lim / tn : 0.0; tu *= sc; tw *= sc; }
+                    if (tn > lim && lim > 0.0 && fabs(det) > 1e-30) {
+                        cvx_disc_step(B[1][1], B[1][2], B[2][1], B[2][2], ru, rw, lim, &tu, &tw);
+                    } else if (tn > lim) { double sc = tn > 0.0 ? lim / tn : 0.0; tu *= sc; tw *= sc; }
                     f[k][0] = fn; f[k][1] = tu; f[k][2] = tw;
                 }
             }
@@ -2358,6 +2414,8 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
     aba_cache_t kc;
     fk_cache_t fc;
     float tol = cparams[10];
+    u32 bmode = f_as_u(cparams[18]);
+    float fresp[MAX_BODIES * 37u];
     for (u32 s = 0; s < nsteps; s++) {
         if (has_pd != 0u)
             for (u32 d = 0; d < n_dofs; d++)
@@ -2366,13 +2424,50 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
 
         aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
                      bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_BUILD);
+
+        for (u32 b = 0; b < nbodies; b++) fresp[b * 37u] = 0.0f;
         u32 used = 0;
         for (u32 w = 0; w < sweeps; w++) {
             float mv = contact_thread_c(world_idx, cparams, bodies, geometry, q, v,
                                         ext_forces, contact_state, hf_heights, qdd, &fc,
-                                        w == 0u ? PHYZ_FK_BUILD : PHYZ_FK_REUSE);
+                                        w == 0u ? PHYZ_FK_BUILD : PHYZ_FK_REUSE,
+                                        bmode >= 1u ? fresp : (const float*)0);
             aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
                          bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_REUSE);
+            // Leg-coupled foot response (block mode): for each body the first
+            // sweep found in contact, the body's spatial velocity change per unit
+            // body-frame wrench, from ABA solves on the cached factorisation
+            // (q, v, dt fixed within the step) differenced against zero wrench,
+            // then a velocity FK of the qdd change.
+            if (w == 0u && bmode >= 1u && nbodies <= MAX_BODIES) {
+                u32 qb = world_idx * nv, eb = world_idx * nbodies * 6u;
+                float qsave[MAX_BODIES * 6u], esave[MAX_BODIES * 6u], q0[MAX_BODIES * 6u], dv[MAX_BODIES * 6u];
+                for (u32 k = 0; k < nv; k++) qsave[k] = qdd[qb + k];
+                for (u32 k = 0; k < nbodies * 6u; k++) { esave[k] = ext_forces[eb + k]; ext_forces[eb + k] = 0.0f; }
+                aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
+                             bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_REUSE);
+                for (u32 k = 0; k < nv; k++) q0[k] = qdd[qb + k];
+                const float* wb = world_bodies(bodies, world_idx);
+                for (u32 bi = 0; bi < nbodies; bi++) {
+                    if (fc.n_sel(bi) == 0u) continue;
+                    for (u32 ax = 0; ax < 6u; ax++) {
+                        ext_forces[eb + bi * 6u + ax] = 1.0f;
+                        aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
+                                     bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_REUSE);
+                        ext_forces[eb + bi * 6u + ax] = 0.0f;
+                        for (u32 k = 0; k < nv; k++) dv[k] = qdd[qb + k] - q0[k];
+                        r9 fr[MAX_BODIES]; v3 fp[MAX_BODIES], fw[MAX_BODIES], fl[MAX_BODIES];
+                        fk_world(wb, nbodies, nv, q, qb, dv, 0u, qdd, dt, false, fr, fp, fw, fl);
+                        float* R = fresp + bi * 37u + 1u;
+                        R[0 * 6u + ax] = fw[bi].x; R[1 * 6u + ax] = fw[bi].y; R[2 * 6u + ax] = fw[bi].z;
+                        R[3 * 6u + ax] = fl[bi].x; R[4 * 6u + ax] = fl[bi].y; R[5 * 6u + ax] = fl[bi].z;
+                    }
+                    fresp[bi * 37u] = 1.0f;
+                }
+                for (u32 k = 0; k < nv; k++) qdd[qb + k] = qsave[k];
+                for (u32 k = 0; k < nbodies * 6u; k++) ext_forces[eb + k] = esave[k];
+            }
+
             used = w + 1u;
             // Converged: this sweep moved no impulse by more than `tol` of
             // the largest. Its ABA has already run, so qdd carries it.
