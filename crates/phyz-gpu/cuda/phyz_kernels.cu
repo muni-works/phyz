@@ -2190,8 +2190,30 @@ PHYZ_DEV void integrate_thread(u32 idx, u32 nworld, u32 nv, float dt, u32 nbodie
     u32 q_off = world_idx * nv + body_qoff(bodies, body_idx);
     u32 v_off = world_idx * nv + body_voff(bodies, body_idx);
 
-    // Velocity first (semi-implicit).
-    for (u32 k = 0; k < ndof; k++) v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+    // Free joint, as phyz_rigid's CPU step does it: add the `ω × v` turn
+    // back into the linear update (`strip_free_joint_coriolis`), then turn
+    // the result into the frame the step ends in by R(−ω dt)
+    // (`rotate_free_joint_velocities`), both with the step's starting ω.
+    // Without it the linear velocity takes a first-order turn that stretches
+    // |v| by (|ω|dt)²/2 a step and drifts against the CPU reference.
+    float w0x = v[v_off], w0y = v[v_off + 1u], w0z = v[v_off + 2u];
+    if (jtype != 0u && jtype != 1u && jtype != 3u) {
+        float lx = v[v_off + 3u], ly = v[v_off + 4u], lz = v[v_off + 5u];
+        float cx = w0y * lz - w0z * ly, cy = w0z * lx - w0x * lz, cz = w0x * ly - w0y * lx;
+        for (u32 k = 0; k < 3u; k++) v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+        v[v_off + 3u] = lx + dt * (qdd[v_off + 3u] + cx);
+        v[v_off + 4u] = ly + dt * (qdd[v_off + 4u] + cy);
+        v[v_off + 5u] = lz + dt * (qdd[v_off + 5u] + cz);
+        float th = sqrtf(w0x * w0x + w0y * w0y + w0z * w0z) * dt;
+        if (th >= 1e-12f && isfinite(th)) {
+            v4 r = quat_exp(v3_(-w0x * dt, -w0y * dt, -w0z * dt));
+            v3 t = qrotate(r, v3_(v[v_off + 3u], v[v_off + 4u], v[v_off + 5u]));
+            v[v_off + 3u] = t.x; v[v_off + 4u] = t.y; v[v_off + 5u] = t.z;
+        }
+    } else {
+        // Velocity first (semi-implicit).
+        for (u32 k = 0; k < ndof; k++) v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+    }
 
     if (jtype == 0u || jtype == 1u) {
         q[q_off] = q[q_off] + dt * v[v_off];
@@ -2212,12 +2234,14 @@ PHYZ_DEV void integrate_thread(u32 idx, u32 nworld, u32 nv, float dt, u32 nbodie
     v3 lin = v3_(v[v_off + 3u], v[v_off + 4u], v[v_off + 5u]);
     v4 cur = quat_exp(v3_(q[q_off], q[q_off + 1u], q[q_off + 2u]));
 
-    v3 world_lin = qrotate(cur, lin);
+    // The updated linear velocity is in the END frame: rotate by `nxt`, as
+    // phyz_rigid::integrate_configuration does.
+    v4 nxt = qnormalize(qmul(cur, quat_exp(v3_scale(omega, dt))));
+    v3 world_lin = qrotate(nxt, lin);
     q[q_off + 3u] = q[q_off + 3u] + dt * world_lin.x;
     q[q_off + 4u] = q[q_off + 4u] + dt * world_lin.y;
     q[q_off + 5u] = q[q_off + 5u] + dt * world_lin.z;
 
-    v4 nxt = qnormalize(qmul(cur, quat_exp(v3_scale(omega, dt))));
     v3 lg = qlog(nxt);
     q[q_off] = lg.x; q[q_off + 1u] = lg.y; q[q_off + 2u] = lg.z;
 }
