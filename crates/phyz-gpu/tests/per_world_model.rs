@@ -198,3 +198,36 @@ fn structure_mismatch_is_refused() {
     assert!(sim.set_world_models(&[base.clone(), bad]).is_err());
     assert!(sim.set_world_models(&[base]).is_err(), "wrong count");
 }
+
+/// `update_world_models` / `update_world_friction` in place, after a
+/// different first table, are the batch built with the final table: what a
+/// per-world DR reset in an RL env does every control step.
+#[test]
+fn in_place_updates_match_a_fresh_table() {
+    let n = MU.len();
+    let base = rig();
+    let mut sim = HostBatchSimulator::new(base.clone(), n).unwrap();
+    let g = BodyContactGains::uniform_frequency(&base, 250.0, 1.0);
+    sim.enable_contact_impulse(0.0, 0.5, &g, &[], None).unwrap();
+    sim.enable_pd_control(&pd(&base)).unwrap();
+    let addr = sim.state_addrs();
+    // Start from the wrong table, then fix worlds 1..n in place.
+    let models: Vec<Model> = (0..n).map(variant).collect();
+    sim.set_world_models(&vec![variant(0); n]).unwrap();
+    sim.set_world_friction(&[0.5; 4]).unwrap();
+    let upd: Vec<(usize, &Model)> = (1..n).map(|w| (w, &models[w])).collect();
+    sim.update_world_models(&upd).unwrap();
+    let fr: Vec<(usize, f64)> = (0..n).map(|w| (w, MU[w])).collect();
+    sim.update_world_friction(&fr).unwrap();
+    assert_eq!(sim.state_addrs(), addr, "state buffers moved");
+    let states: Vec<State> = models.iter().map(spawn).collect();
+    sim.load_states(&states);
+    sim.set_position_targets(&vec![vec![0.1, -0.2]; n]).unwrap();
+    sim.step_many(STEPS).unwrap();
+    let got = sim.readback_states();
+    let want = batched(StepMode::Fused, false);
+    for w in 0..n {
+        assert_bits(&got[w], &want[w], w);
+    }
+    assert!(sim.update_world_models(&[(n, &models[0])]).is_err());
+}

@@ -998,6 +998,68 @@ impl<B: KernelBackend> BatchSim<B> {
         Ok(())
     }
 
+    /// Rewrite some worlds' rows of the per-world model table in place — what
+    /// a domain-randomisation reset of a few worlds per control step needs.
+    /// [`Self::set_world_models`] must have run (the table exists), and the
+    /// same shape rules apply. The table does not move, so a captured step
+    /// span stays valid and replays the new rows.
+    pub fn update_world_models(&mut self, worlds: &[(usize, &Model)]) -> Result<(), String> {
+        let shared = pack_bodies(&self.model);
+        let stride = shared.len();
+        for &(w, m) in worlds {
+            if w >= self.nworld {
+                return Err(format!("update_world_models: world {w} of {}", self.nworld));
+            }
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
+                return Err(format!("update_world_models: world {w} has a different shape"));
+            }
+            if m.dt != self.model.dt || m.gravity != self.model.gravity {
+                return Err(format!("update_world_models: world {w} differs in dt or gravity"));
+            }
+            let mut row = pack_bodies(m);
+            for b in 0..self.model.nbodies() {
+                let o = b * crate::layout::BODY_STRIDE;
+                for k in [0usize, 1, 2, 3, 33, 34] {
+                    if row[o + k].to_bits() != shared[o + k].to_bits() {
+                        return Err(format!("update_world_models: world {w} body {b} differs in structure (slot {k})"));
+                    }
+                }
+            }
+            row[35] = f32::from_bits(stride as u32);
+            let mut tmp = self.backend.alloc(stride)?;
+            self.backend.upload(&mut tmp, &row)?;
+            self.backend.copy(&tmp, &mut self.bodies, w * stride)?;
+        }
+        if !worlds.is_empty() {
+            // The copies are queued; `tmp` must outlive them.
+            self.backend.synchronize()?;
+        }
+        Ok(())
+    }
+
+    /// Rewrite some worlds' contact friction in place, after
+    /// [`Self::set_world_friction`] (the per-world block exists). The terrain
+    /// buffer does not move, so a captured span stays valid.
+    pub fn update_world_friction(&mut self, worlds: &[(usize, f64)]) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        let base1 = c.params.world_fric_base1 as usize;
+        if base1 == 0 {
+            return Err("update_world_friction: call set_world_friction first".into());
+        }
+        let fric = c.world_fric.as_mut().ok_or("no per-world friction")?;
+        for &(w, f) in worlds {
+            if w >= fric.len() {
+                return Err(format!("update_world_friction: world {w} of {}", fric.len()));
+            }
+            fric[w] = f as f32;
+            let mut tmp = self.backend.alloc(1)?;
+            self.backend.upload(&mut tmp, &[f as f32])?;
+            self.backend.copy(&tmp, &mut c.hf_buf, base1 - 1 + w)?;
+            self.backend.synchronize()?;
+        }
+        Ok(())
+    }
+
     /// Per-world contact friction (one coefficient per world), replacing the
     /// scalar from `enable_contact_*`. Requires contact to be enabled.
     pub fn set_world_friction(&mut self, friction: &[f64]) -> Result<(), String> {
