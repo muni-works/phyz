@@ -52,7 +52,9 @@ pub(crate) struct ContactParams {
     /// ordered at submission, so the uniform would hold its last value for
     /// every dispatch. Kept as explicit padding rather than removed so the
     /// struct layout the shader expects does not shift.
-    pub(crate) _reserved_sweep: u32,
+    /// CUDA only: 1 = per-body block solve of the ground-contact corners.
+    /// WGSL reads this slot as padding.
+    pub(crate) block_solve: u32,
     pub(crate) restitution: f32,
     pub(crate) restitution_threshold: f32,
     pub(crate) solref_erp: f32,
@@ -94,7 +96,7 @@ impl ContactParams {
             hf_oz: heightfield.map_or(0.0, |h| h.origin.z as f32),
             hf_cell: heightfield.map_or(1.0, |h| h.cell as f32),
             solve_mode: u32::from(contact.impulse_solve),
-            _reserved_sweep: 0,
+            block_solve: 0,
             restitution: contact.restitution as f32,
             restitution_threshold: contact.restitution_threshold as f32,
             solref_erp: contact.solref_erp as f32,

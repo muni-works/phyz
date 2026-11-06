@@ -1062,6 +1062,24 @@ impl<B: KernelBackend> BatchSim<B> {
         Ok(())
     }
 
+    /// Solve each body's ground-contact corners jointly: an f64 local
+    /// Delassus from the body's own inertia with the convex solve's soft
+    /// normal row, 24 inner Gauss-Seidel passes per outer sweep. Off by
+    /// default (per-corner staged updates). Impulse mode, ground contacts.
+    pub fn set_block_solve(&mut self, on: bool) -> Result<(), String> {
+        self.set_block_mode(u32::from(on))
+    }
+
+    /// [`Self::set_block_solve`] by mode: 0 off, 1 soft normal row, 2 rigid
+    /// normal row (diagnostic).
+    pub fn set_block_mode(&mut self, mode: u32) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        c.params.block_solve = mode;
+        self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
     /// Per world `(total sweeps, max sweeps in one step)` since the last
     /// [`Self::reset_sweep_stats`].
     pub fn readback_sweep_stats(&self) -> Result<Vec<(f32, f32)>, String> {

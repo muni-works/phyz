@@ -571,6 +571,10 @@ typedef struct {
     // Impulse sweeps stop once the relative impulse change is below this
     // (0 = always run the full sweep count).
     float sweep_tol;
+    // 1 = solve each body's ground-contact corners jointly (f64 local
+    // Delassus from the body's own inertia, soft normal row as
+    // phyz_contact's convex solve, inner Gauss-Seidel). 0 = per-corner.
+    u32 block_solve;
     u32 hf_nx, hf_ny;
     float hf_ox, hf_oy, hf_oz, hf_cell;
     u32 solve_mode;
@@ -590,7 +594,8 @@ PHYZ_DEV cparams_t decode_cparams(const float* p) {
     c.hf_nx = f_as_u(p[11]); c.hf_ny = f_as_u(p[12]);
     c.hf_ox = p[13]; c.hf_oy = p[14]; c.hf_oz = p[15]; c.hf_cell = p[16];
     c.solve_mode = f_as_u(p[17]);
-    // p[18] reserved (was a sweep index)
+    // p[18]: block_solve (was a reserved sweep index)
+    c.block_solve = f_as_u(p[18]);
     c.restitution = p[19]; c.restitution_threshold = p[20];
     c.solref_erp = p[21]; c.margin = p[22];
     c.solimp_dmin = p[23]; c.solimp_dmax = p[24]; c.solimp_width = p[25];
@@ -1285,6 +1290,104 @@ PHYZ_DEV float contact_thread_c(u32 world_idx, const float* cparams,
             contact_state[dead + 2u] = 0.0f;
         }
 
+        if (solve_mode == 1u && cp.block_solve != 0u && n_sel > 0u) {
+            // ── Per-body block step ──
+            // Corner k's velocity responds to impulse f_j at corner j through
+            // the body's own (isolated) inverse inertia:
+            //   W(k,a; j,b) = (e_ka . e_jb)/m + e_ka . ((I^-1 (r_j x e_jb)) x r_k)
+            // with r relative to the COM. The chain's coupling is not in W;
+            // the outer [contact, ABA] sweep carries it through qdd exactly,
+            // and the isolated W under-estimates the mass, so it under-relaxes.
+            double mass = (double)bf(bodies, i, 4u);
+            v3 com = v3_(bf(bodies, i, 5u), bf(bodies, i, 6u), bf(bodies, i, 7u));
+            v3 sup[MAX_PTS], dir[MAX_PTS][3], ang[MAX_PTS][3];
+            v3 supw[MAX_PTS]; float th[MAX_PTS];
+            double bv[MAX_PTS][3], fo[MAX_PTS][3], f[MAX_PTS][3], bias_k[MAX_PTS], dk[MAX_PTS];
+            for (u32 k = 0; k < n_sel; k++) {
+                u32 g = sel_g[k];
+                u32 gtype = (u32)geometry[g * GEOM_STRIDE];
+                sup[k] = contact_pt(geometry, g, gtype, sel_c[k], z_body);
+                supw[k] = v3_add(w_pos[i], rot_mul(w_rot[i], sup[k]));
+                v3 nw; th[k] = terrain(&cp, hf_heights, supw[k].x, supw[k].y, &nw);
+                v3 nb_ = rot_tmul(w_rot[i], nw);
+                v3 tu, tw; contact_tangents(nb_, &tu, &tw);
+                dir[k][0] = nb_; dir[k][1] = tu; dir[k][2] = tw;
+                v3 rc = v3_sub(sup[k], com);
+                for (u32 a = 0; a < 3u; a++) ang[k][a] = inertia_solve(bodies, i, cross3(rc, dir[k][a]));
+                v3 vp = v3_add(w_lin[i], cross3(w_omega[i], sup[k]));
+                u32 slot = cs_base + CS_IMPULSE_OFF + k * 3u;
+                for (u32 a = 0; a < 3u; a++) {
+                    bv[k][a] = (double)v3_dot(vp, dir[k][a]);
+                    fo[k][a] = (double)contact_state[slot + a];
+                    f[k][a] = fo[k][a];
+                }
+                float pen = sel_pen[k];
+                float d_imp = impedance_at(&cp, pen);
+                dk[k] = (double)fmin_(fmax_(d_imp, 1e-6f), 1.0f);
+                bias_k[k] = (double)(d_imp * cp.solref_erp * fmax_(pen, 0.0f) / fmax_(dt, 1e-9f));
+            }
+#define CVX_W(K, A, J, B) ((double)v3_dot(dir[K][A], dir[J][B]) / mass + \
+                           (double)v3_dot(dir[K][A], cross3(ang[J][B], v3_sub(sup[K], com))))
+            // Free velocity: the current one less the current impulses' own
+            // (local) effect, so the inner solve sees a fixed problem.
+            double bfree[MAX_PTS][3];
+            for (u32 k = 0; k < n_sel; k++)
+                for (u32 a = 0; a < 3u; a++) {
+                    double acc = bv[k][a];
+                    for (u32 j = 0; j < n_sel; j++)
+                        for (u32 b = 0; b < 3u; b++) acc -= CVX_W(k, a, j, b) * fo[j][b];
+                    bfree[k][a] = acc;
+                }
+            double mu = (double)cp.friction;
+            for (u32 it = 0; it < 24u; it++) {
+                for (u32 k = 0; k < n_sel; k++) {
+                    double r[3];
+                    for (u32 a = 0; a < 3u; a++) {
+                        double acc = bfree[k][a];
+                        for (u32 j = 0; j < n_sel; j++) {
+                            if (j == k) continue;
+                            for (u32 b = 0; b < 3u; b++) acc += CVX_W(k, a, j, b) * f[j][b];
+                        }
+                        r[a] = acc;
+                    }
+                    double B[3][3];
+                    for (u32 a = 0; a < 3u; a++)
+                        for (u32 b = 0; b < 3u; b++) B[a][b] = CVX_W(k, a, k, b);
+                    double rn = (1.0 - dk[k]) / dk[k] * B[0][0];
+                    if (cp.block_solve == 2u) rn = 0.0;  // diagnostic: rigid row
+                    B[0][0] += rn > 1e-6 ? rn : 1e-6;
+                    B[1][1] += 1e-6; B[2][2] += 1e-6;
+                    double un = B[0][0] > 0.0 ? (bias_k[k] - r[0] - B[0][1] * f[k][1] - B[0][2] * f[k][2]) / B[0][0] : 0.0;
+                    double fn = un > 0.0 ? un : 0.0;
+                    double ru = r[1] + B[1][0] * fn, rw = r[2] + B[2][0] * fn;
+                    double det = B[1][1] * B[2][2] - B[1][2] * B[2][1];
+                    double tu = 0.0, tw = 0.0;
+                    if (fabs(det) > 1e-30) {
+                        tu = -(B[2][2] * ru - B[1][2] * rw) / det;
+                        tw = -(B[1][1] * rw - B[2][1] * ru) / det;
+                    }
+                    double lim = mu * fn, tn = sqrt(tu * tu + tw * tw);
+                    if (tn > lim) { double sc = tn > 0.0 ? lim / tn : 0.0; tu *= sc; tw *= sc; }
+                    f[k][0] = fn; f[k][1] = tu; f[k][2] = tw;
+                }
+            }
+#undef CVX_W
+            for (u32 k = 0; k < n_sel; k++) {
+                u32 slot = cs_base + CS_IMPULSE_OFF + k * 3u;
+                float fn = (float)f[k][0], tu = (float)f[k][1], tw = (float)f[k][2];
+                cv_move = fmax_(cv_move, (float)fmax(fabs(f[k][0] - fo[k][0]), fmax(fabs(f[k][1] - fo[k][1]), fabs(f[k][2] - fo[k][2]))));
+                cv_max = fmax_(cv_max, fn);
+                contact_state[slot] = fn;
+                contact_state[slot + 1u] = tu;
+                contact_state[slot + 2u] = tw;
+                v3 f_body = v3_scale(v3_add(v3_add(v3_scale(dir[k][0], fn), v3_scale(dir[k][1], tu)),
+                                            v3_scale(dir[k][2], tw)), 1.0f / fmax_(dt, 1e-9f));
+                add_ext(ext_forces, ef_env_base + i * 6u, cross3(sup[k], f_body), f_body);
+                f_w_total = v3_add(f_w_total, rot_mul(w_rot[i], f_body));
+                any_touch = true;
+                if (sel_pen[k] > deepest) { deepest = sel_pen[k]; deepest_w = v3_(supw[k].x, supw[k].y, th[k]); }
+            }
+        } else
         for (u32 cpt = 0; cpt < n_sel; cpt++) {
             u32 g = sel_g[cpt];
             u32 gbase = g * GEOM_STRIDE;
