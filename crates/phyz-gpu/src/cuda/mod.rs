@@ -598,6 +598,21 @@ struct HistoryPass<B: KernelBackend> {
     slots: usize,
 }
 
+/// Device addresses of a [`BatchSim`]'s state buffers ([`BatchSim::state_addrs`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StateAddrs {
+    /// Generalised positions, `[nworld][nq]`.
+    pub q: u64,
+    /// Generalised velocities, `[nworld][nv]`.
+    pub v: u64,
+    /// Generalised forces the next step applies, `[nworld][nv]`.
+    pub ctrl: u64,
+    /// Per-body contact state, `[nworld][nbodies][CONTACT_STATE_STRIDE]`.
+    pub contact_state: u64,
+    /// FK readout, once kinematics is enabled.
+    pub kin: Option<u64>,
+}
+
 /// Batched simulator over a [`KernelBackend`].
 ///
 /// Same surface as [`crate::GpuBatchSimulator`] — build one from a `Model`
@@ -1304,6 +1319,26 @@ impl<B: KernelBackend> BatchSim<B> {
         self.backend
             .upload(&mut self.ctrl, &ctrl)
             .expect("upload ctrl");
+    }
+
+    /// Device addresses of the state buffers, for a caller that runs its own
+    /// kernels on [`BatchSim::backend`]'s stream between steps (an actuator
+    /// model that writes `ctrl` every physics step, a device-side observation).
+    ///
+    /// Layouts: `q` is `[nworld][nq]`, `v` and `ctrl` `[nworld][nv]`, all f32;
+    /// `contact_state` is `[nworld][nbodies][CONTACT_STATE_STRIDE]`; `kin` is
+    /// the FK readout once [`BatchSim::enable_kinematics`] ran. The buffers
+    /// never move after construction, so the addresses are graph-stable, and
+    /// a step span reads `ctrl` afresh every step: writing it between
+    /// `step_many(1)` calls is how a per-step controller drives the plant.
+    pub fn state_addrs(&self) -> StateAddrs {
+        StateAddrs {
+            q: self.backend.buffer_addr(&self.q),
+            v: self.backend.buffer_addr(&self.v),
+            ctrl: self.backend.buffer_addr(&self.ctrl),
+            contact_state: self.backend.buffer_addr(&self.contact_state),
+            kin: self.kin.as_ref().map(|k| self.backend.buffer_addr(k)),
+        }
     }
 
     /// Upload control inputs for all environments.
