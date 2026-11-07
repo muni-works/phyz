@@ -35,6 +35,8 @@ pub struct CudaBackend {
     fk: CudaFunction,
     obs: CudaFunction,
     policy: CudaFunction,
+    lat_pd: CudaFunction,
+    lat_gather: CudaFunction,
     /// False when the context could not give us a capturable stream and we
     /// fell back to the legacy default stream, which cannot be captured.
     capturable: bool,
@@ -189,6 +191,8 @@ impl CudaBackend {
             fk: load("phyz_fk")?,
             obs: load("phyz_obs")?,
             policy: load("phyz_policy")?,
+            lat_pd: load("phyz_lat_pd")?,
+            lat_gather: load("phyz_lat_gather")?,
             ctx,
             stream,
             capturable,
@@ -641,6 +645,7 @@ impl KernelBackend for CudaBackend {
         ext_forces: &mut Self::Buffer,
         contact_state: &mut Self::Buffer,
         sweep_stats: &mut Self::Buffer,
+        lat: super::LatBufs<'_, Self>,
     ) -> Result<(), String> {
         // SAFETY: as in launch_pd, against `phyz_step_impulse`.
         let r = unsafe {
@@ -673,9 +678,80 @@ impl KernelBackend for CudaBackend {
                 .arg(ext_forces)
                 .arg(contact_state)
                 .arg(sweep_stats)
+                .arg(&a.has_lat)
+                .arg(lat.tab)
+                .arg(lat.par)
+                .arg(lat.ipar)
+                .arg(lat.qring)
+                .arg(lat.vring)
+                .arg(lat.tring)
+                .arg(lat.tau)
                 .launch(cfg(a.nworld))
         };
         r.map(|_| ()).map_err(err("launch phyz_step_impulse"))
+    }
+
+    fn launch_lat_pd(
+        &self,
+        a: super::LatArgs,
+        lat: super::LatBufs<'_, Self>,
+        q: &mut Self::Buffer,
+        v: &mut Self::Buffer,
+        ctrl: &mut Self::Buffer,
+    ) -> Result<(), String> {
+        // SAFETY: argument order and types match `phyz_lat_pd`; BatchSim
+        // sizes every buffer from the same spec and world count.
+        let r = unsafe {
+            self.stream
+                .launch_builder(&self.lat_pd)
+                .arg(&a.nworld)
+                .arg(&a.nq)
+                .arg(&a.nv)
+                .arg(lat.tab)
+                .arg(lat.par)
+                .arg(lat.ipar)
+                .arg(lat.qring)
+                .arg(lat.vring)
+                .arg(lat.tring)
+                .arg(lat.tau)
+                .arg(q)
+                .arg(v)
+                .arg(ctrl)
+                .launch(cfg(a.nworld))
+        };
+        r.map(|_| ()).map_err(err("launch phyz_lat_pd"))
+    }
+
+    fn launch_lat_gather(
+        &self,
+        a: super::LatArgs,
+        tab: &Self::Buffer,
+        ipar: &Self::Buffer,
+        qring: &Self::Buffer,
+        vring: &Self::Buffer,
+        tau: &Self::Buffer,
+        q: &Self::Buffer,
+        v: &Self::Buffer,
+        out: &mut Self::Buffer,
+    ) -> Result<(), String> {
+        // SAFETY: as in launch_lat_pd, against `phyz_lat_gather`.
+        let r = unsafe {
+            self.stream
+                .launch_builder(&self.lat_gather)
+                .arg(&a.nworld)
+                .arg(&a.nq)
+                .arg(&a.nv)
+                .arg(tab)
+                .arg(ipar)
+                .arg(qring)
+                .arg(vring)
+                .arg(tau)
+                .arg(q)
+                .arg(v)
+                .arg(out)
+                .launch(cfg(a.nworld))
+        };
+        r.map(|_| ()).map_err(err("launch phyz_lat_gather"))
     }
 
     fn launch_fk(

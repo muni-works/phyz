@@ -127,6 +127,44 @@ unsafe extern "C" {
         ext_forces: *mut f32,
         contact_state: *mut f32,
         sweep_stats: *mut f32,
+        has_lat: u32,
+        lat_tab: *const f32,
+        lat_par: *const f32,
+        lat_ipar: *mut f32,
+        lat_qring: *mut f32,
+        lat_vring: *mut f32,
+        lat_tring: *const f32,
+        lat_tau: *mut f32,
+    );
+    fn phyz_host_lat_pd(
+        n_threads: u32,
+        nworld: u32,
+        nq: u32,
+        nv: u32,
+        tab: *const f32,
+        par: *const f32,
+        ipar: *mut f32,
+        qring: *mut f32,
+        vring: *mut f32,
+        tring: *const f32,
+        tau_avg: *mut f32,
+        q: *mut f32,
+        v: *mut f32,
+        ctrl: *mut f32,
+    );
+    fn phyz_host_lat_gather(
+        n_threads: u32,
+        nworld: u32,
+        nq: u32,
+        nv: u32,
+        tab: *const f32,
+        ipar: *const f32,
+        qring: *const f32,
+        vring: *const f32,
+        tau_avg: *const f32,
+        q: *const f32,
+        v: *const f32,
+        out: *mut f32,
     );
     fn phyz_host_fk(
         n_threads: u32,
@@ -471,6 +509,7 @@ impl KernelBackend for HostBackend {
         ext_forces: &mut Vec<f32>,
         contact_state: &mut Vec<f32>,
         sweep_stats: &mut Vec<f32>,
+        lat: super::LatBufs<'_, Self>,
     ) -> Result<(), String> {
         // SAFETY: as in launch_pd.
         unsafe {
@@ -503,6 +542,77 @@ impl KernelBackend for HostBackend {
                 ext_forces.as_mut_ptr(),
                 contact_state.as_mut_ptr(),
                 sweep_stats.as_mut_ptr(),
+                a.has_lat,
+                lat.tab.as_ptr(),
+                lat.par.as_ptr(),
+                lat.ipar.as_mut_ptr(),
+                lat.qring.as_mut_ptr(),
+                lat.vring.as_mut_ptr(),
+                lat.tring.as_ptr(),
+                lat.tau.as_mut_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn launch_lat_pd(
+        &self,
+        a: super::LatArgs,
+        lat: super::LatBufs<'_, Self>,
+        q: &mut Vec<f32>,
+        v: &mut Vec<f32>,
+        ctrl: &mut Vec<f32>,
+    ) -> Result<(), String> {
+        // SAFETY: live Vecs sized by BatchSim from the same spec.
+        unsafe {
+            phyz_host_lat_pd(
+                a.nworld,
+                a.nworld,
+                a.nq,
+                a.nv,
+                lat.tab.as_ptr(),
+                lat.par.as_ptr(),
+                lat.ipar.as_mut_ptr(),
+                lat.qring.as_mut_ptr(),
+                lat.vring.as_mut_ptr(),
+                lat.tring.as_ptr(),
+                lat.tau.as_mut_ptr(),
+                q.as_mut_ptr(),
+                v.as_mut_ptr(),
+                ctrl.as_mut_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn launch_lat_gather(
+        &self,
+        a: super::LatArgs,
+        tab: &Vec<f32>,
+        ipar: &Vec<f32>,
+        qring: &Vec<f32>,
+        vring: &Vec<f32>,
+        tau: &Vec<f32>,
+        q: &Vec<f32>,
+        v: &Vec<f32>,
+        out: &mut Vec<f32>,
+    ) -> Result<(), String> {
+        // SAFETY: as in launch_lat_pd.
+        unsafe {
+            phyz_host_lat_gather(
+                a.nworld,
+                a.nworld,
+                a.nq,
+                a.nv,
+                tab.as_ptr(),
+                ipar.as_ptr(),
+                qring.as_ptr(),
+                vring.as_ptr(),
+                tau.as_ptr(),
+                q.as_ptr(),
+                v.as_ptr(),
+                out.as_mut_ptr(),
             );
         }
         Ok(())

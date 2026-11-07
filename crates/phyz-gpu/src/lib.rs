@@ -18,6 +18,7 @@ pub mod gpu_batch_simulator;
 pub mod gpu_simulator;
 pub mod gpu_state;
 pub mod interop;
+pub mod latency_pd;
 pub mod layout;
 pub mod pd_pipeline;
 pub mod policy_pipeline;
@@ -32,6 +33,7 @@ pub use contact_pipeline::{
 pub use gpu_batch_simulator::{DEFAULT_CONTACT_SWEEPS, GpuBatchSimulator, default_contact_sweeps};
 pub use gpu_simulator::GpuSimulator;
 pub use gpu_state::GpuState;
+pub use latency_pd::{LatencyPdSpec, WorldLatency};
 pub use pd_pipeline::{PdDof, PdPipeline};
 pub use policy_pipeline::{ObsOp, PolicySpec};
 
