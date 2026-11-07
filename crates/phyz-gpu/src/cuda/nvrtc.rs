@@ -640,6 +640,7 @@ impl KernelBackend for CudaBackend {
         qdd: &mut Self::Buffer,
         ext_forces: &mut Self::Buffer,
         contact_state: &mut Self::Buffer,
+        sweep_stats: &mut Self::Buffer,
     ) -> Result<(), String> {
         // SAFETY: as in launch_pd, against `phyz_step_impulse`.
         let r = unsafe {
@@ -671,6 +672,7 @@ impl KernelBackend for CudaBackend {
                 .arg(qdd)
                 .arg(ext_forces)
                 .arg(contact_state)
+                .arg(sweep_stats)
                 .launch(cfg(a.nworld))
         };
         r.map(|_| ()).map_err(err("launch phyz_step_impulse"))

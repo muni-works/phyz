@@ -126,6 +126,7 @@ unsafe extern "C" {
         qdd: *mut f32,
         ext_forces: *mut f32,
         contact_state: *mut f32,
+        sweep_stats: *mut f32,
     );
     fn phyz_host_fk(
         n_threads: u32,
@@ -469,6 +470,7 @@ impl KernelBackend for HostBackend {
         qdd: &mut Vec<f32>,
         ext_forces: &mut Vec<f32>,
         contact_state: &mut Vec<f32>,
+        sweep_stats: &mut Vec<f32>,
     ) -> Result<(), String> {
         // SAFETY: as in launch_pd.
         unsafe {
@@ -500,6 +502,7 @@ impl KernelBackend for HostBackend {
                 qdd.as_mut_ptr(),
                 ext_forces.as_mut_ptr(),
                 contact_state.as_mut_ptr(),
+                sweep_stats.as_mut_ptr(),
             );
         }
         Ok(())

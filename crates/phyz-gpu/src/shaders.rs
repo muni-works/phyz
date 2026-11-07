@@ -1665,9 +1665,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v_off = world_idx * params.nv + bu_i(body_idx, 3u);
     let dt = params.dt;
 
-    // Velocity first (semi-implicit).
-    for (var k = 0u; k < ndof; k++) {
-        v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+    // Free joint as phyz_rigid's CPU step: ω×v strip, then R(−ω dt) turn
+    // (mirrors integrate_thread in phyz_kernels.cu).
+    if (jtype != 0u && jtype != 1u && jtype != 3u) {
+        let w0 = vec3<f32>(v[v_off], v[v_off + 1u], v[v_off + 2u]);
+        let l0 = vec3<f32>(v[v_off + 3u], v[v_off + 4u], v[v_off + 5u]);
+        let c = cross(w0, l0);
+        for (var k = 0u; k < 3u; k++) {
+            v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+        }
+        var l1 = vec3<f32>(l0.x + dt * (qdd[v_off + 3u] + c.x),
+                           l0.y + dt * (qdd[v_off + 4u] + c.y),
+                           l0.z + dt * (qdd[v_off + 5u] + c.z));
+        let th = length(w0) * dt;
+        if (th >= 1e-12) {
+            l1 = qrotate(qexp(w0 * -dt), l1);
+        }
+        v[v_off + 3u] = l1.x; v[v_off + 4u] = l1.y; v[v_off + 5u] = l1.z;
+    } else {
+        // Velocity first (semi-implicit).
+        for (var k = 0u; k < ndof; k++) {
+            v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
+        }
     }
 
     if (jtype == 0u || jtype == 1u) {
@@ -1690,12 +1709,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lin = vec3<f32>(v[v_off + 3u], v[v_off + 4u], v[v_off + 5u]);
     let cur = qexp(vec3<f32>(q[q_off], q[q_off + 1u], q[q_off + 2u]));
 
-    let world_lin = qrotate(cur, lin);
+    let nxt = normalize(qmul(cur, qexp(omega * dt)));
+    let world_lin = qrotate(nxt, lin);
     q[q_off + 3u] = q[q_off + 3u] + dt * world_lin.x;
     q[q_off + 4u] = q[q_off + 4u] + dt * world_lin.y;
     q[q_off + 5u] = q[q_off + 5u] + dt * world_lin.z;
 
-    let nxt = normalize(qmul(cur, qexp(omega * dt)));
     let lg = qlog(nxt);
     q[q_off] = lg.x; q[q_off + 1u] = lg.y; q[q_off + 2u] = lg.z;
 }
