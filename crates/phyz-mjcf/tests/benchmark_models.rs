@@ -111,5 +111,8 @@ fn unitree_g1_23dof() {
     let mass: f64 = m.bodies.iter().map(|b| b.inertia.mass).sum();
     // Unitree's authored inertials sum to ~33.3 kg for the 23-DOF rev 1.0.
     assert!((30.0..37.0).contains(&mass), "total mass {mass}");
-    assert!(m.joints.iter().filter(|j| j.armature > 0.0).count() >= 23, "armature is load-bearing");
+    assert!(
+        m.joints.iter().filter(|j| j.armature > 0.0).count() >= 23,
+        "armature is load-bearing"
+    );
 }

@@ -65,7 +65,10 @@ pub struct ConvexBatch {
 impl ConvexBatch {
     /// An empty batch at capacity `nmax` (or a device solver on `ordinal`).
     pub fn new(nmax: usize) -> Self {
-        Self { nmax: nmax.max(1), ..Default::default() }
+        Self {
+            nmax: nmax.max(1),
+            ..Default::default()
+        }
     }
     /// Number of problems.
     pub fn len(&self) -> usize {
@@ -77,9 +80,19 @@ impl ConvexBatch {
     }
     /// Append one problem: `delassus` is row-major `3n x 3n`, `free_velocity`
     /// `3n`, `seed` up to `n` impulses (missing entries start at zero).
-    pub fn push(&mut self, delassus: &[f64], free_velocity: &[f64], rows: &[ConvexRow], seed: &[[f64; 3]]) {
+    pub fn push(
+        &mut self,
+        delassus: &[f64],
+        free_velocity: &[f64],
+        rows: &[ConvexRow],
+        seed: &[[f64; 3]],
+    ) {
         let n = rows.len();
-        assert!(n <= self.nmax, "problem has {n} contacts, batch capacity {}", self.nmax);
+        assert!(
+            n <= self.nmax,
+            "problem has {n} contacts, batch capacity {}",
+            self.nmax
+        );
         let dim = 3 * n;
         assert_eq!(delassus.len(), dim * dim);
         assert_eq!(free_velocity.len(), dim);
@@ -205,13 +218,23 @@ impl CudaConvex {
         let ptx = cudarc::nvrtc::compile_ptx_with_opts(CONVEX_KERNEL_SOURCE, opts)
             .map_err(|x| format!("NVRTC compile of phyz_convex.cu: {x}"))?;
         let module = ctx.load_module(ptx).map_err(e("load PTX"))?;
-        let func = module.load_function("phyz_convex_solve").map_err(e("load kernel"))?;
-        Ok(Self { stream: ctx.default_stream(), func })
+        let func = module
+            .load_function("phyz_convex_solve")
+            .map_err(e("load kernel"))?;
+        Ok(Self {
+            stream: ctx.default_stream(),
+            func,
+        })
     }
 
     /// Solve `batch` on the device. Returns the stats and the kernel's wall
     /// time in seconds (uploads and downloads excluded).
-    pub fn solve(&self, cfg: &ConvexCfg, batch: &mut ConvexBatch, block: u32) -> Result<(ConvexStats, f64), String> {
+    pub fn solve(
+        &self,
+        cfg: &ConvexCfg,
+        batch: &mut ConvexBatch,
+        block: u32,
+    ) -> Result<(ConvexStats, f64), String> {
         use cudarc::driver::{LaunchConfig, PushKernelArg};
         let e = |w: &'static str| move |x: cudarc::driver::DriverError| format!("{w}: {x}");
         let s = &self.stream;
@@ -221,8 +244,12 @@ impl CudaConvex {
         let b = s.clone_htod(&batch.b).map_err(e("upload b"))?;
         let rows = s.clone_htod(&batch.rows).map_err(e("upload rows"))?;
         let mut f = s.clone_htod(&batch.f).map_err(e("upload f"))?;
-        let mut stat = s.alloc_zeros::<f64>(2 * batch.len().max(1)).map_err(e("alloc stat"))?;
-        let mut scratch = s.alloc_zeros::<f64>(batch.scratch_len()).map_err(e("alloc scratch"))?;
+        let mut stat = s
+            .alloc_zeros::<f64>(2 * batch.len().max(1))
+            .map_err(e("alloc stat"))?;
+        let mut scratch = s
+            .alloc_zeros::<f64>(batch.scratch_len())
+            .map_err(e("alloc scratch"))?;
         let (nmax, newton, mj, coupling, nse) = (
             batch.nmax as u32,
             cfg.newton as u32,
@@ -230,7 +257,11 @@ impl CudaConvex {
             if cfg.block_diagonal { 2u32 } else { 0 },
             cfg.no_stall_exit as u32,
         );
-        let lc = LaunchConfig { grid_dim: (nprob.div_ceil(block).max(1), 1, 1), block_dim: (block, 1, 1), shared_mem_bytes: 0 };
+        let lc = LaunchConfig {
+            grid_dim: (nprob.div_ceil(block).max(1), 1, 1),
+            block_dim: (block, 1, 1),
+            shared_mem_bytes: 0,
+        };
         s.synchronize().map_err(e("sync"))?;
         let t = std::time::Instant::now();
         // SAFETY: buffers sized by `ConvexBatch` for `nprob` problems at `nmax`.

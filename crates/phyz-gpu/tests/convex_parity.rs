@@ -11,8 +11,8 @@
 #![cfg(feature = "cuda-host")]
 
 use phyz_contact::{
-    ContactCoupling, ContactMaterial, ContactProblem, ContactSolverConfig, assemble, find_ground_contacts_model,
-    solve_contacts_warm,
+    ContactCoupling, ContactMaterial, ContactProblem, ContactSolverConfig, assemble,
+    find_ground_contacts_model, solve_contacts_warm,
 };
 use phyz_gpu::cuda::convex::{ConvexBatch, ConvexCfg, ConvexRow, solve_host};
 use phyz_math::{GRAVITY, Mat3, SpatialInertia, SpatialTransform, Vec3};
@@ -44,7 +44,12 @@ fn dropped_box() -> Model {
     let mut m = ModelBuilder::new()
         .gravity(Vec3::new(0.0, 0.0, -GRAVITY))
         .dt(0.001)
-        .add_body("box", -1, Joint::free(SpatialTransform::identity()), box_inertia(1.5, h))
+        .add_body(
+            "box",
+            -1,
+            Joint::free(SpatialTransform::identity()),
+            box_inertia(1.5, h),
+        )
         .build();
     m.bodies[0].geometry = Some(Geometry::Box { half_extents: h });
     m
@@ -57,13 +62,21 @@ fn foot_chain() -> Model {
     let mut m = ModelBuilder::new()
         .gravity(Vec3::new(0.0, 0.0, -GRAVITY))
         .dt(0.002)
-        .add_body("shank", -1, Joint::free(SpatialTransform::identity()), box_inertia(4.0, shank))
+        .add_body(
+            "shank",
+            -1,
+            Joint::free(SpatialTransform::identity()),
+            box_inertia(4.0, shank),
+        )
         .add_body(
             "foot",
             0,
             Joint {
                 joint_type: JointType::Revolute,
-                parent_to_joint: SpatialTransform::new(Mat3::identity(), Vec3::new(0.0, 0.0, -0.17)),
+                parent_to_joint: SpatialTransform::new(
+                    Mat3::identity(),
+                    Vec3::new(0.0, 0.0, -0.17),
+                ),
                 axis: Vec3::new(0.0, 1.0, 0.0),
                 damping: 0.5,
                 armature: 0.01,
@@ -79,7 +92,10 @@ fn foot_chain() -> Model {
 /// Run `steps` of the CPU pipeline from `init` and record every problem.
 pub fn record(model: &Model, init: phyz_model::State, steps: usize, mu: f64) -> Vec<Recorded> {
     let cfg = ContactSolverConfig::simulation();
-    let mat = ContactMaterial { friction: mu, ..ContactMaterial::default() };
+    let mat = ContactMaterial {
+        friction: mu,
+        ..ContactMaterial::default()
+    };
     let mats = vec![mat.clone(); model.bodies.len()];
     let mut s = init;
     let mut warm: Vec<Vec3> = Vec::new();
@@ -99,7 +115,11 @@ pub fn record(model: &Model, init: phyz_model::State, steps: usize, mu: f64) -> 
             let asm = assemble(model, &s, &contacts, &mats, &free, model.dt, &cfg);
             // Seed: last step's impulses when the contact count held (the
             // stepper's cache keys by contact; a count match is the common case).
-            let seed = if warm.len() == contacts.len() { warm.clone() } else { Vec::new() };
+            let seed = if warm.len() == contacts.len() {
+                warm.clone()
+            } else {
+                Vec::new()
+            };
             let sol = solve_contacts_warm(&asm.problem, &cfg, &seed);
             s.v = &free + &asm.velocity_delta(&sol.impulses);
             warm = sol.impulses.clone();
@@ -111,7 +131,12 @@ pub fn record(model: &Model, init: phyz_model::State, steps: usize, mu: f64) -> 
                 residual: sol.residual,
             });
         }
-        phyz_rigid::rotate_free_joint_velocities(model, v0.as_slice(), s.v.as_mut_slice(), model.dt);
+        phyz_rigid::rotate_free_joint_velocities(
+            model,
+            v0.as_slice(),
+            s.v.as_mut_slice(),
+            model.dt,
+        );
         let v = s.v.clone();
         phyz_rigid::integrate_configuration(model, s.q.as_mut_slice(), v.as_slice(), model.dt);
         s.time += model.dt;
@@ -140,7 +165,11 @@ pub fn batch_of(recs: &[Recorded]) -> ConvexBatch {
             .problem
             .rows
             .iter()
-            .map(|row| ConvexRow { mu: row.mu, bias: row.bias, impedance: row.effective_impedance() })
+            .map(|row| ConvexRow {
+                mu: row.mu,
+                bias: row.bias,
+                impedance: row.effective_impedance(),
+            })
             .collect();
         let seed: Vec<[f64; 3]> = r.seed.iter().map(|v| [v.x, v.y, v.z]).collect();
         b.push(&r.problem.delassus, &r.problem.free_velocity, &rows, &seed);
@@ -158,17 +187,32 @@ fn check(name: &str, recs: &[Recorded]) {
         let got = b.impulses(p);
         for (c, (g, w)) in got.iter().zip(&r.impulses).enumerate() {
             for (k, (x, y)) in g.iter().zip([w.x, w.y, w.z]).enumerate() {
-                assert_eq!(x.to_bits(), y.to_bits(), "{name} problem {p} (n={}) contact {c}[{k}]: {x:e} vs {y:e}", r.problem.n);
+                assert_eq!(
+                    x.to_bits(),
+                    y.to_bits(),
+                    "{name} problem {p} (n={}) contact {c}[{k}]: {x:e} vs {y:e}",
+                    r.problem.n
+                );
             }
         }
-        assert_eq!(stats[p].0 as usize, r.iterations, "{name} problem {p}: iterations");
-        assert_eq!(stats[p].1.to_bits(), r.residual.to_bits(), "{name} problem {p}: residual");
+        assert_eq!(
+            stats[p].0 as usize, r.iterations,
+            "{name} problem {p}: iterations"
+        );
+        assert_eq!(
+            stats[p].1.to_bits(),
+            r.residual.to_bits(),
+            "{name} problem {p}: residual"
+        );
         if r.iterations > 16 {
             newton_cases += 1;
         }
     }
     let nmax = recs.iter().map(|r| r.problem.n).max().unwrap();
-    eprintln!("{name}: {} problems, n<= {nmax}, {newton_cases} reached the Newton stage — bit-identical", recs.len());
+    eprintln!(
+        "{name}: {} problems, n<= {nmax}, {newton_cases} reached the Newton stage — bit-identical",
+        recs.len()
+    );
 }
 
 #[test]
@@ -215,8 +259,16 @@ fn recorded_dump_is_bit_identical() {
     let d = std::fs::read(&path).expect("read dump");
     assert_eq!(&d[..4], b"CVX1");
     let mut o = 4usize;
-    let u = |o: &mut usize| { let v = u32::from_le_bytes(d[*o..*o + 4].try_into().unwrap()); *o += 4; v };
-    let f = |o: &mut usize| { let v = f64::from_le_bytes(d[*o..*o + 8].try_into().unwrap()); *o += 8; v };
+    let u = |o: &mut usize| {
+        let v = u32::from_le_bytes(d[*o..*o + 4].try_into().unwrap());
+        *o += 4;
+        v
+    };
+    let f = |o: &mut usize| {
+        let v = f64::from_le_bytes(d[*o..*o + 8].try_into().unwrap());
+        *o += 8;
+        v
+    };
     let count = u(&mut o) as usize;
     let mut recs = Vec::with_capacity(count);
     let mut cfg = None;
@@ -227,8 +279,14 @@ fn recorded_dump_is_bit_identical() {
         let fl = [d[o], d[o + 1], d[o + 2], d[o + 3]];
         o += 4;
         cfg = Some(ConvexCfg {
-            regularization: reg, tolerance: tol, relaxation: rel, max_iterations: maxit,
-            newton: fl[0] != 0, mujoco_compat: fl[1] != 0, block_diagonal: fl[2] != 0, no_stall_exit: fl[3] != 0,
+            regularization: reg,
+            tolerance: tol,
+            relaxation: rel,
+            max_iterations: maxit,
+            newton: fl[0] != 0,
+            mujoco_compat: fl[1] != 0,
+            block_diagonal: fl[2] != 0,
+            no_stall_exit: fl[3] != 0,
         });
         let mut v = |k: usize, o: &mut usize| (0..k).map(|_| f(o)).collect::<Vec<f64>>();
         let a = v(9 * n * n, &mut o);
@@ -244,7 +302,14 @@ fn recorded_dump_is_bit_identical() {
     let nmax = recs.iter().map(|r| r.0).max().unwrap();
     let mut bt = ConvexBatch::new(nmax);
     for (_, a, b, r, s, ..) in &recs {
-        let rows: Vec<ConvexRow> = r.chunks(3).map(|c| ConvexRow { mu: c[0], bias: c[1], impedance: c[2] }).collect();
+        let rows: Vec<ConvexRow> = r
+            .chunks(3)
+            .map(|c| ConvexRow {
+                mu: c[0],
+                bias: c[1],
+                impedance: c[2],
+            })
+            .collect();
         let seed: Vec<[f64; 3]> = s.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
         bt.push(a, b, &rows, &seed);
     }
@@ -252,7 +317,11 @@ fn recorded_dump_is_bit_identical() {
     for (p, (_, _, _, _, _, w, it, res)) in recs.iter().enumerate() {
         let got: Vec<f64> = bt.impulses(p).into_iter().flatten().collect();
         for (k, (g, x)) in got.iter().zip(w).enumerate() {
-            assert_eq!(g.to_bits(), x.to_bits(), "problem {p} component {k}: {g:e} vs {x:e}");
+            assert_eq!(
+                g.to_bits(),
+                x.to_bits(),
+                "problem {p} component {k}: {g:e} vs {x:e}"
+            );
         }
         assert_eq!(st[p].0, *it, "problem {p}: iterations");
         assert_eq!(st[p].1.to_bits(), res.to_bits(), "problem {p}: residual");
