@@ -46,7 +46,7 @@ members = [
 # a v0.4.0 tag; .github/workflows/release.yml refuses a tag that does not match
 # the version below, so the bump lands here first.
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 license = "MIT"
 rust-version = "1.94"
@@ -68,37 +68,37 @@ tang-safetensors = { version = "0.1.0" }
 tang-compute = { version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-phyz-math = { version = "0.4.0", path = "crates/phyz-math" }
-phyz-model = { version = "0.4.0", path = "crates/phyz-model" }
-phyz-rigid = { version = "0.4.0", path = "crates/phyz-rigid" }
-phyz-diff = { version = "0.4.0", path = "crates/phyz-diff" }
-phyz-mjcf = { version = "0.4.0", path = "crates/phyz-mjcf" }
-phyz-urdf = { version = "0.4.0", path = "crates/phyz-urdf" }
-phyz-collision = { version = "0.4.0", path = "crates/phyz-collision" }
-phyz-contact = { version = "0.4.0", path = "crates/phyz-contact" }
-phyz-loop = { version = "0.4.0", path = "crates/phyz-loop" }
-phyz-gpu = { version = "0.4.0", path = "crates/phyz-gpu" }
-phyz-camera = { version = "0.4.0", path = "crates/phyz-camera" }
-phyz-particle = { version = "0.4.0", path = "crates/phyz-particle" }
-phyz-xpbd = { version = "0.4.0", path = "crates/phyz-xpbd" }
-phyz-vbd = { version = "0.4.0", path = "crates/phyz-vbd" }
-phyz-em = { version = "0.4.0", path = "crates/phyz-em" }
-phyz-md = { version = "0.4.0", path = "crates/phyz-md" }
-phyz-qft = { version = "0.4.0", path = "crates/phyz-qft" }
-phyz-gravity = { version = "0.4.0", path = "crates/phyz-gravity" }
-phyz-coupling = { version = "0.4.0", path = "crates/phyz-coupling" }
-phyz-guardian = { version = "0.4.0", path = "crates/phyz-guardian" }
-phyz-lbm = { version = "0.4.0", path = "crates/phyz-lbm" }
-phyz-compile = { version = "0.4.0", path = "crates/phyz-compile" }
-phyz-prob = { version = "0.4.0", path = "crates/phyz-prob" }
-phyz-world = { version = "0.4.0", path = "crates/phyz-world" }
-phyz-real2sim = { version = "0.4.0", path = "crates/phyz-real2sim" }
-phyz-format = { version = "0.4.0", path = "crates/phyz-format" }
-phyz-regge = { version = "0.4.0", path = "crates/phyz-regge", default-features = false }
-phyz-quantum = { version = "0.4.0", path = "crates/phyz-quantum", default-features = false }
-phyz = { version = "0.4.0", path = "crates/phyz" }
-phyz-env = { version = "0.4.0", path = "crates/phyz-env" }
-phyz-validate = { version = "0.4.0", path = "crates/phyz-validate" }
+phyz-math = { version = "0.4.1", path = "crates/phyz-math" }
+phyz-model = { version = "0.4.1", path = "crates/phyz-model" }
+phyz-rigid = { version = "0.4.1", path = "crates/phyz-rigid" }
+phyz-diff = { version = "0.4.1", path = "crates/phyz-diff" }
+phyz-mjcf = { version = "0.4.1", path = "crates/phyz-mjcf" }
+phyz-urdf = { version = "0.4.1", path = "crates/phyz-urdf" }
+phyz-collision = { version = "0.4.1", path = "crates/phyz-collision" }
+phyz-contact = { version = "0.4.1", path = "crates/phyz-contact" }
+phyz-loop = { version = "0.4.1", path = "crates/phyz-loop" }
+phyz-gpu = { version = "0.4.1", path = "crates/phyz-gpu" }
+phyz-camera = { version = "0.4.1", path = "crates/phyz-camera" }
+phyz-particle = { version = "0.4.1", path = "crates/phyz-particle" }
+phyz-xpbd = { version = "0.4.1", path = "crates/phyz-xpbd" }
+phyz-vbd = { version = "0.4.1", path = "crates/phyz-vbd" }
+phyz-em = { version = "0.4.1", path = "crates/phyz-em" }
+phyz-md = { version = "0.4.1", path = "crates/phyz-md" }
+phyz-qft = { version = "0.4.1", path = "crates/phyz-qft" }
+phyz-gravity = { version = "0.4.1", path = "crates/phyz-gravity" }
+phyz-coupling = { version = "0.4.1", path = "crates/phyz-coupling" }
+phyz-guardian = { version = "0.4.1", path = "crates/phyz-guardian" }
+phyz-lbm = { version = "0.4.1", path = "crates/phyz-lbm" }
+phyz-compile = { version = "0.4.1", path = "crates/phyz-compile" }
+phyz-prob = { version = "0.4.1", path = "crates/phyz-prob" }
+phyz-world = { version = "0.4.1", path = "crates/phyz-world" }
+phyz-real2sim = { version = "0.4.1", path = "crates/phyz-real2sim" }
+phyz-format = { version = "0.4.1", path = "crates/phyz-format" }
+phyz-regge = { version = "0.4.1", path = "crates/phyz-regge", default-features = false }
+phyz-quantum = { version = "0.4.1", path = "crates/phyz-quantum", default-features = false }
+phyz = { version = "0.4.1", path = "crates/phyz" }
+phyz-env = { version = "0.4.1", path = "crates/phyz-env" }
+phyz-validate = { version = "0.4.1", path = "crates/phyz-validate" }
 
 # Optimize WASM builds even in dev (debug assertions cost ~19% of main-thread time)
 [profile.dev.package.phyz-home]
