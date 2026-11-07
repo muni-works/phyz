@@ -46,9 +46,9 @@ use crate::policy_pipeline::{
 };
 use phyz_model::{Heightfield, Model, State};
 
-pub mod convex;
 #[cfg(feature = "cuda-host")]
 pub mod census;
+pub mod convex;
 pub mod host;
 #[cfg(feature = "cuda")]
 pub mod nvrtc;
@@ -964,17 +964,24 @@ impl<B: KernelBackend> BatchSim<B> {
     /// built from `models[w]` alone.
     pub fn set_world_models(&mut self, models: &[Model]) -> Result<(), String> {
         if models.len() != self.nworld {
-            return Err(format!("set_world_models: {} models for {} worlds", models.len(), self.nworld));
+            return Err(format!(
+                "set_world_models: {} models for {} worlds",
+                models.len(),
+                self.nworld
+            ));
         }
         let shared = pack_bodies(&self.model);
         let stride = shared.len();
         let mut data = Vec::with_capacity(stride * self.nworld);
         for (w, m) in models.iter().enumerate() {
-            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv
+            {
                 return Err(format!("set_world_models: world {w} has a different shape"));
             }
             if m.dt != self.model.dt || m.gravity != self.model.gravity {
-                return Err(format!("set_world_models: world {w} differs in dt or gravity"));
+                return Err(format!(
+                    "set_world_models: world {w} differs in dt or gravity"
+                ));
             }
             let row = pack_bodies(m);
             // Structure (parent, joint type, offsets, geometry slices) is
@@ -983,7 +990,9 @@ impl<B: KernelBackend> BatchSim<B> {
                 let o = b * crate::layout::BODY_STRIDE;
                 for k in [0usize, 1, 2, 3, 33, 34] {
                     if row[o + k].to_bits() != shared[o + k].to_bits() {
-                        return Err(format!("set_world_models: world {w} body {b} differs in structure (slot {k})"));
+                        return Err(format!(
+                            "set_world_models: world {w} body {b} differs in structure (slot {k})"
+                        ));
                     }
                 }
             }
@@ -1012,18 +1021,25 @@ impl<B: KernelBackend> BatchSim<B> {
             if w >= self.nworld {
                 return Err(format!("update_world_models: world {w} of {}", self.nworld));
             }
-            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
-                return Err(format!("update_world_models: world {w} has a different shape"));
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv
+            {
+                return Err(format!(
+                    "update_world_models: world {w} has a different shape"
+                ));
             }
             if m.dt != self.model.dt || m.gravity != self.model.gravity {
-                return Err(format!("update_world_models: world {w} differs in dt or gravity"));
+                return Err(format!(
+                    "update_world_models: world {w} differs in dt or gravity"
+                ));
             }
             let mut row = pack_bodies(m);
             for b in 0..self.model.nbodies() {
                 let o = b * crate::layout::BODY_STRIDE;
                 for k in [0usize, 1, 2, 3, 33, 34] {
                     if row[o + k].to_bits() != shared[o + k].to_bits() {
-                        return Err(format!("update_world_models: world {w} body {b} differs in structure (slot {k})"));
+                        return Err(format!(
+                            "update_world_models: world {w} body {b} differs in structure (slot {k})"
+                        ));
                     }
                 }
             }
@@ -1051,7 +1067,10 @@ impl<B: KernelBackend> BatchSim<B> {
         let fric = c.world_fric.as_mut().ok_or("no per-world friction")?;
         for &(w, f) in worlds {
             if w >= fric.len() {
-                return Err(format!("update_world_friction: world {w} of {}", fric.len()));
+                return Err(format!(
+                    "update_world_friction: world {w} of {}",
+                    fric.len()
+                ));
             }
             fric[w] = f as f32;
             let mut tmp = self.backend.alloc(1)?;
@@ -1066,7 +1085,11 @@ impl<B: KernelBackend> BatchSim<B> {
     /// scalar from `enable_contact_*`. Requires contact to be enabled.
     pub fn set_world_friction(&mut self, friction: &[f64]) -> Result<(), String> {
         if friction.len() != self.nworld {
-            return Err(format!("set_world_friction: {} values for {} worlds", friction.len(), self.nworld));
+            return Err(format!(
+                "set_world_friction: {} values for {} worlds",
+                friction.len(),
+                self.nworld
+            ));
         }
         let c = self.contact.as_mut().ok_or("contact not enabled")?;
         c.world_fric = Some(friction.iter().map(|&f| f as f32).collect());
@@ -1078,9 +1101,16 @@ impl<B: KernelBackend> BatchSim<B> {
     /// of that grid. [`Self::set_heightfield`] returns to one shared field.
     pub fn set_world_heightfields(&mut self, fields: &[Heightfield]) -> Result<(), String> {
         if fields.len() != self.nworld {
-            return Err(format!("set_world_heightfields: {} fields for {} worlds", fields.len(), self.nworld));
+            return Err(format!(
+                "set_world_heightfields: {} fields for {} worlds",
+                fields.len(),
+                self.nworld
+            ));
         }
-        let c = self.contact.as_mut().ok_or("contact not enabled — call enable_contact_terrain first")?;
+        let c = self
+            .contact
+            .as_mut()
+            .ok_or("contact not enabled — call enable_contact_terrain first")?;
         let p = &c.params;
         let stride = fields[0].heights.len();
         let mut data = Vec::with_capacity(stride * fields.len());
@@ -1093,7 +1123,9 @@ impl<B: KernelBackend> BatchSim<B> {
                 && h.origin.z as f32 == p.hf_oz
                 && h.cell as f32 == p.hf_cell;
             if !same || h.heights.len() != stride {
-                return Err(format!("set_world_heightfields: world {w}'s grid differs from the enabled heightfield's"));
+                return Err(format!(
+                    "set_world_heightfields: world {w}'s grid differs from the enabled heightfield's"
+                ));
             }
             data.extend_from_slice(&h.heights);
         }
@@ -1145,12 +1177,18 @@ impl<B: KernelBackend> BatchSim<B> {
     /// [`Self::reset_sweep_stats`].
     pub fn readback_sweep_stats(&self) -> Result<Vec<(f32, f32)>, String> {
         let d = self.backend.download(&self.sweep_stats)?;
-        Ok(d.chunks(2).take(self.nworld).map(|c| (c[0], c[1])).collect())
+        Ok(d.chunks(2)
+            .take(self.nworld)
+            .map(|c| (c[0], c[1]))
+            .collect())
     }
 
     /// Zero the sweep counters.
     pub fn reset_sweep_stats(&mut self) -> Result<(), String> {
-        self.backend.upload(&mut self.sweep_stats, &vec![0.0f32; (2 * self.nworld).max(1)])
+        self.backend.upload(
+            &mut self.sweep_stats,
+            &vec![0.0f32; (2 * self.nworld).max(1)],
+        )
     }
 
     /// The backend the kernels run on.
