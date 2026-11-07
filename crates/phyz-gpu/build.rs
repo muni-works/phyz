@@ -5,6 +5,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=cuda/phyz_kernels.cu");
     println!("cargo:rerun-if-changed=cuda/phyz_train.cu");
+    println!("cargo:rerun-if-changed=cuda/phyz_convex.cu");
     #[cfg(feature = "cuda-host")]
     {
         cc::Build::new()
@@ -20,5 +21,16 @@ fn main() {
             .opt_level(2)
             .warnings(true)
             .compile("phyz_cuda_host_kernels");
+        // The convex solve is held to bit-identity with the Rust solver, so
+        // no FMA contraction (Rust never contracts).
+        cc::Build::new()
+            .cpp(true)
+            .file("cuda/phyz_convex.cu")
+            .flag("-xc++")
+            .flag("-ffp-contract=off")
+            .std("c++14")
+            .opt_level(2)
+            .warnings(true)
+            .compile("phyz_cuda_host_convex");
     }
 }

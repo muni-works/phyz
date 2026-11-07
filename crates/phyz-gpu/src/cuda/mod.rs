@@ -46,6 +46,7 @@ use crate::policy_pipeline::{
 };
 use phyz_model::{Heightfield, Model, State};
 
+pub mod convex;
 #[cfg(feature = "cuda-host")]
 pub mod census;
 pub mod host;
@@ -453,6 +454,7 @@ pub trait KernelBackend {
         _qdd: &mut Self::Buffer,
         _ext_forces: &mut Self::Buffer,
         _contact_state: &mut Self::Buffer,
+        _sweep_stats: &mut Self::Buffer,
     ) -> Result<(), String> {
         Err("this backend has no fused impulse step".into())
     }
@@ -512,6 +514,12 @@ struct ContactPass<B: KernelBackend> {
     /// Node capacity of `hf_buf`; `set_heightfield` may not outgrow it.
     hf_capacity: usize,
     collidable_bodies: usize,
+    /// The shared field's nodes (what `hf_buf` holds without per-world terrain).
+    shared_hf: Vec<f32>,
+    /// Per-world terrain: `nworld` fields of `stride` nodes, concatenated.
+    world_hf: Option<(usize, Vec<f32>)>,
+    /// Per-world contact friction, one per world.
+    world_fric: Option<Vec<f32>>,
 }
 
 struct PdPass<B: KernelBackend> {
@@ -592,6 +600,21 @@ struct HistoryPass<B: KernelBackend> {
     slots: usize,
 }
 
+/// Device addresses of a [`BatchSim`]'s state buffers ([`BatchSim::state_addrs`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StateAddrs {
+    /// Generalised positions, `[nworld][nq]`.
+    pub q: u64,
+    /// Generalised velocities, `[nworld][nv]`.
+    pub v: u64,
+    /// Generalised forces the next step applies, `[nworld][nv]`.
+    pub ctrl: u64,
+    /// Per-body contact state, `[nworld][nbodies][CONTACT_STATE_STRIDE]`.
+    pub contact_state: u64,
+    /// FK readout, once kinematics is enabled.
+    pub kin: Option<u64>,
+}
+
 /// Batched simulator over a [`KernelBackend`].
 ///
 /// Same surface as [`crate::GpuBatchSimulator`] — build one from a `Model`
@@ -611,6 +634,9 @@ pub struct BatchSim<B: KernelBackend> {
     qdd: B::Buffer,
     ext_forces: B::Buffer,
     contact_state: B::Buffer,
+    /// Per world: total impulse sweeps run and the most in one step, since
+    /// the last [`BatchSim::reset_sweep_stats`] (fused impulse step only).
+    sweep_stats: B::Buffer,
     contact: Option<ContactPass<B>>,
     pd: Option<PdPass<B>>,
     /// FK readout buffer, `[nworld][nbodies][XF_STRIDE]`.
@@ -774,6 +800,8 @@ impl<B: KernelBackend> BatchSim<B> {
         let qdd = backend.alloc((nworld * model.nv).max(1))?;
         let ext_forces = backend.alloc((nworld * nb * 6).max(1))?;
         let contact_state = backend.alloc((nworld * nb * CONTACT_STATE_STRIDE).max(1))?;
+        let mut sweep_stats = backend.alloc((2 * nworld).max(1))?;
+        backend.upload(&mut sweep_stats, &vec![0.0f32; (2 * nworld).max(1)])?;
         Ok(Self {
             backend,
             model,
@@ -785,6 +813,7 @@ impl<B: KernelBackend> BatchSim<B> {
             qdd,
             ext_forces,
             contact_state,
+            sweep_stats,
             contact: None,
             pd: None,
             kin: None,
@@ -913,12 +942,215 @@ impl<B: KernelBackend> BatchSim<B> {
                 self.model.nv
             ));
         }
-        self.backend
-            .upload(&mut self.bodies, &pack_bodies(&model))?;
+        // Fresh (shared-width) storage: a previous `set_world_models` may
+        // have widened the table to one row per world.
+        let data = pack_bodies(&model);
+        self.bodies = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut self.bodies, &data)?;
         self.model = model;
         // `dt` and gravity are baked into the ABA launch arguments.
         self.invalidate_graph();
         Ok(())
+    }
+
+    /// Give every world its own body table: masses, centres of mass,
+    /// inertias, joint placements, damping and armature may all differ per
+    /// world — what per-world domain randomisation of one robot needs.
+    ///
+    /// `models[w]` must have this simulator's shape (bodies, `nq`, `nv`, joint
+    /// types and geometry slices); `dt` and gravity come from the simulator's
+    /// own model and must match. [`Self::set_model`] returns to one shared
+    /// table. Physics for world `w` is then bit-identical to a simulator
+    /// built from `models[w]` alone.
+    pub fn set_world_models(&mut self, models: &[Model]) -> Result<(), String> {
+        if models.len() != self.nworld {
+            return Err(format!("set_world_models: {} models for {} worlds", models.len(), self.nworld));
+        }
+        let shared = pack_bodies(&self.model);
+        let stride = shared.len();
+        let mut data = Vec::with_capacity(stride * self.nworld);
+        for (w, m) in models.iter().enumerate() {
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
+                return Err(format!("set_world_models: world {w} has a different shape"));
+            }
+            if m.dt != self.model.dt || m.gravity != self.model.gravity {
+                return Err(format!("set_world_models: world {w} differs in dt or gravity"));
+            }
+            let row = pack_bodies(m);
+            // Structure (parent, joint type, offsets, geometry slices) is
+            // compiled into the shared kernels' assumptions; refuse a mismatch.
+            for b in 0..self.model.nbodies() {
+                let o = b * crate::layout::BODY_STRIDE;
+                for k in [0usize, 1, 2, 3, 33, 34] {
+                    if row[o + k].to_bits() != shared[o + k].to_bits() {
+                        return Err(format!("set_world_models: world {w} body {b} differs in structure (slot {k})"));
+                    }
+                }
+            }
+            data.extend_from_slice(&row);
+        }
+        // Body 0's padding slot carries the per-world stride (the kernels'
+        // `world_bodies`); 0 there means shared.
+        for w in 0..self.nworld {
+            data[w * stride + 35] = f32::from_bits(stride as u32);
+        }
+        self.bodies = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut self.bodies, &data)?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Rewrite some worlds' rows of the per-world model table in place — what
+    /// a domain-randomisation reset of a few worlds per control step needs.
+    /// [`Self::set_world_models`] must have run (the table exists), and the
+    /// same shape rules apply. The table does not move, so a captured step
+    /// span stays valid and replays the new rows.
+    pub fn update_world_models(&mut self, worlds: &[(usize, &Model)]) -> Result<(), String> {
+        let shared = pack_bodies(&self.model);
+        let stride = shared.len();
+        for &(w, m) in worlds {
+            if w >= self.nworld {
+                return Err(format!("update_world_models: world {w} of {}", self.nworld));
+            }
+            if m.nbodies() != self.model.nbodies() || m.nq != self.model.nq || m.nv != self.model.nv {
+                return Err(format!("update_world_models: world {w} has a different shape"));
+            }
+            if m.dt != self.model.dt || m.gravity != self.model.gravity {
+                return Err(format!("update_world_models: world {w} differs in dt or gravity"));
+            }
+            let mut row = pack_bodies(m);
+            for b in 0..self.model.nbodies() {
+                let o = b * crate::layout::BODY_STRIDE;
+                for k in [0usize, 1, 2, 3, 33, 34] {
+                    if row[o + k].to_bits() != shared[o + k].to_bits() {
+                        return Err(format!("update_world_models: world {w} body {b} differs in structure (slot {k})"));
+                    }
+                }
+            }
+            row[35] = f32::from_bits(stride as u32);
+            let mut tmp = self.backend.alloc(stride)?;
+            self.backend.upload(&mut tmp, &row)?;
+            self.backend.copy(&tmp, &mut self.bodies, w * stride)?;
+        }
+        if !worlds.is_empty() {
+            // The copies are queued; `tmp` must outlive them.
+            self.backend.synchronize()?;
+        }
+        Ok(())
+    }
+
+    /// Rewrite some worlds' contact friction in place, after
+    /// [`Self::set_world_friction`] (the per-world block exists). The terrain
+    /// buffer does not move, so a captured span stays valid.
+    pub fn update_world_friction(&mut self, worlds: &[(usize, f64)]) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        let base1 = c.params.world_fric_base1 as usize;
+        if base1 == 0 {
+            return Err("update_world_friction: call set_world_friction first".into());
+        }
+        let fric = c.world_fric.as_mut().ok_or("no per-world friction")?;
+        for &(w, f) in worlds {
+            if w >= fric.len() {
+                return Err(format!("update_world_friction: world {w} of {}", fric.len()));
+            }
+            fric[w] = f as f32;
+            let mut tmp = self.backend.alloc(1)?;
+            self.backend.upload(&mut tmp, &[f as f32])?;
+            self.backend.copy(&tmp, &mut c.hf_buf, base1 - 1 + w)?;
+            self.backend.synchronize()?;
+        }
+        Ok(())
+    }
+
+    /// Per-world contact friction (one coefficient per world), replacing the
+    /// scalar from `enable_contact_*`. Requires contact to be enabled.
+    pub fn set_world_friction(&mut self, friction: &[f64]) -> Result<(), String> {
+        if friction.len() != self.nworld {
+            return Err(format!("set_world_friction: {} values for {} worlds", friction.len(), self.nworld));
+        }
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        c.world_fric = Some(friction.iter().map(|&f| f as f32).collect());
+        self.upload_world_terrain()
+    }
+
+    /// Per-world heightfields: same grid (`nx`, `ny`, origin, cell) for every
+    /// world, different heights. Requires contact enabled over a heightfield
+    /// of that grid. [`Self::set_heightfield`] returns to one shared field.
+    pub fn set_world_heightfields(&mut self, fields: &[Heightfield]) -> Result<(), String> {
+        if fields.len() != self.nworld {
+            return Err(format!("set_world_heightfields: {} fields for {} worlds", fields.len(), self.nworld));
+        }
+        let c = self.contact.as_mut().ok_or("contact not enabled — call enable_contact_terrain first")?;
+        let p = &c.params;
+        let stride = fields[0].heights.len();
+        let mut data = Vec::with_capacity(stride * fields.len());
+        for (w, h) in fields.iter().enumerate() {
+            validate_heightfield(h)?;
+            let same = h.nx as u32 == p.hf_nx
+                && h.ny as u32 == p.hf_ny
+                && h.origin.x as f32 == p.hf_ox
+                && h.origin.y as f32 == p.hf_oy
+                && h.origin.z as f32 == p.hf_oz
+                && h.cell as f32 == p.hf_cell;
+            if !same || h.heights.len() != stride {
+                return Err(format!("set_world_heightfields: world {w}'s grid differs from the enabled heightfield's"));
+            }
+            data.extend_from_slice(&h.heights);
+        }
+        c.world_hf = Some((stride, data));
+        self.upload_world_terrain()
+    }
+
+    /// Rebuild the heightfield buffer: terrain nodes (shared, or one field
+    /// per world), then the per-world friction row if any.
+    fn upload_world_terrain(&mut self) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        let mut data = match &c.world_hf {
+            Some((_, d)) => d.clone(),
+            None => c.shared_hf.clone(),
+        };
+        if data.is_empty() {
+            data.push(0.0);
+        }
+        c.params.world_hf_stride = c.world_hf.as_ref().map_or(0, |(s, _)| *s as u32);
+        c.params.world_fric_base1 = match &c.world_fric {
+            Some(f) => {
+                let base = data.len() as u32 + 1;
+                data.extend_from_slice(f);
+                base
+            }
+            None => 0,
+        };
+        c.hf_buf = self.backend.alloc(data.len())?;
+        self.backend.upload(&mut c.hf_buf, &data)?;
+        self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Set the impulse-sweep convergence tolerance: a world's sweeps stop
+    /// once no contact impulse moved by more than `tol` times the world's
+    /// largest normal impulse in one sweep, with [`Self::contact_sweeps`]
+    /// as the cap. 0 restores fixed sweeps (the default). Fused impulse
+    /// step only. Requires contact enabled.
+    pub fn set_sweep_tolerance(&mut self, tol: f64) -> Result<(), String> {
+        let c = self.contact.as_mut().ok_or("contact not enabled")?;
+        c.params.sweep_tol = tol as f32;
+        self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// Per world `(total sweeps, max sweeps in one step)` since the last
+    /// [`Self::reset_sweep_stats`].
+    pub fn readback_sweep_stats(&self) -> Result<Vec<(f32, f32)>, String> {
+        let d = self.backend.download(&self.sweep_stats)?;
+        Ok(d.chunks(2).take(self.nworld).map(|c| (c[0], c[1])).collect())
+    }
+
+    /// Zero the sweep counters.
+    pub fn reset_sweep_stats(&mut self) -> Result<(), String> {
+        self.backend.upload(&mut self.sweep_stats, &vec![0.0f32; (2 * self.nworld).max(1)])
     }
 
     /// The backend the kernels run on.
@@ -1062,6 +1294,9 @@ impl<B: KernelBackend> BatchSim<B> {
             hf_buf,
             hf_capacity,
             collidable_bodies: collidable,
+            shared_hf: heightfield.map_or(Vec::new(), |h| h.heights.clone()),
+            world_hf: None,
+            world_fric: None,
         });
         // Fresh geometry / params / heightfield buffers, and possibly a
         // different pass count (penalty vs impulse).
@@ -1086,6 +1321,11 @@ impl<B: KernelBackend> BatchSim<B> {
             ));
         }
         c.params.set_heightfield(hf);
+        c.shared_hf = hf.heights.clone();
+        if c.world_hf.is_some() || c.world_fric.is_some() {
+            c.world_hf = None;
+            return self.upload_world_terrain();
+        }
         census::upload();
         self.backend.upload(&mut c.params_buf, c.params.as_f32s())?;
         census::upload();
@@ -1152,6 +1392,26 @@ impl<B: KernelBackend> BatchSim<B> {
         self.backend
             .upload(&mut self.ctrl, &ctrl)
             .expect("upload ctrl");
+    }
+
+    /// Device addresses of the state buffers, for a caller that runs its own
+    /// kernels on [`BatchSim::backend`]'s stream between steps (an actuator
+    /// model that writes `ctrl` every physics step, a device-side observation).
+    ///
+    /// Layouts: `q` is `[nworld][nq]`, `v` and `ctrl` `[nworld][nv]`, all f32;
+    /// `contact_state` is `[nworld][nbodies][CONTACT_STATE_STRIDE]`; `kin` is
+    /// the FK readout once [`BatchSim::enable_kinematics`] ran. The buffers
+    /// never move after construction, so the addresses are graph-stable, and
+    /// a step span reads `ctrl` afresh every step: writing it between
+    /// `step_many(1)` calls is how a per-step controller drives the plant.
+    pub fn state_addrs(&self) -> StateAddrs {
+        StateAddrs {
+            q: self.backend.buffer_addr(&self.q),
+            v: self.backend.buffer_addr(&self.v),
+            ctrl: self.backend.buffer_addr(&self.ctrl),
+            contact_state: self.backend.buffer_addr(&self.contact_state),
+            kin: self.kin.as_ref().map(|k| self.backend.buffer_addr(k)),
+        }
     }
 
     /// Upload control inputs for all environments.
@@ -1296,6 +1556,7 @@ impl<B: KernelBackend> BatchSim<B> {
             &mut self.qdd,
             &mut self.ext_forces,
             &mut self.contact_state,
+            &mut self.sweep_stats,
         )
     }
 
