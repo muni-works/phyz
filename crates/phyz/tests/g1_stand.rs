@@ -48,6 +48,7 @@ fn g1_stands_five_seconds_as_a_stiff_pd_statue() {
     let mut model = MjcfLoader::from_file(&path).unwrap().build_model();
     model.dt = 0.002;
     let mut state = model.default_state();
+    #[allow(clippy::type_complexity)]
     let hinges: Vec<(usize, usize, (f64, f64, f64, f64))> = model
         .joints
         .iter()
