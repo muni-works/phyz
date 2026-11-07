@@ -2511,6 +2511,28 @@ dependencies = [
 
 [[package]]
 name = "naga"
+version = "24.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e380993072e52eef724eddfcde0ed013b0c023c3f0417336ed041aa9f076994e"
+dependencies = [
+ "arrayvec",
+ "bit-set",
+ "bitflags 2.11.0",
+ "cfg_aliases 0.2.1",
+ "codespan-reporting 0.11.1",
+ "hexf-parse",
+ "indexmap",
+ "log",
+ "rustc-hash 1.1.0",
+ "spirv",
+ "strum 0.26.3",
+ "termcolor",
+ "thiserror 2.0.18",
+ "unicode-xid",
+]
+
+[[package]]
+name = "naga"
 version = "25.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b977c445f26e49757f9aca3631c3b8b836942cb278d69a92e7b80d3b24da632"
@@ -3154,7 +3176,7 @@ dependencies = [
  "phyz-rigid",
  "phyz-urdf",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-gpu",
  "tang-la",
 ]
@@ -3170,7 +3192,7 @@ dependencies = [
  "serde_json",
  "tang",
  "tang-compute",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-safetensors",
  "tang-tensor",
  "tang-train",
@@ -3387,7 +3409,7 @@ dependencies = [
  "rand 0.8.5",
  "serde_json",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-la",
  "tang-mesh",
  "ureq",
@@ -4788,7 +4810,8 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 [[package]]
 name = "tang"
 version = "0.2.1"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01222e2be85bd48a1b129975a3b4045f425adaceb6ecda6e7a97cdb8dd96a75a"
 dependencies = [
  "paste",
 ]
@@ -4796,35 +4819,38 @@ dependencies = [
 [[package]]
 name = "tang-ad"
 version = "0.1.1"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67759a0059717e6704887054248a7aa765fb9ba12ab803233be8cb3b3dfbcce"
 dependencies = [
  "tang",
  "tang-la",
 ]
 
 [[package]]
-name = "tang-compile"
-version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
-dependencies = [
- "tang",
- "tang-expr",
-]
-
-[[package]]
 name = "tang-compute"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcad39db55491d6e0cd80bc58ed9b96c5996601bf76f7a101b601ba1d85cd4b9"
 dependencies = [
  "bytemuck",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
 ]
 
 [[package]]
 name = "tang-expr"
 version = "0.1.1"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f1fdb85a4a0335eb38eac4635d080d54f2cb093e66ef54ce0c5460d35457e90"
+dependencies = [
+ "tang",
+]
+
+[[package]]
+name = "tang-expr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df8225e37bd9287d3d4a32423bbce42cc2de20ff6e12a199072f8b105c717e71"
 dependencies = [
  "tang",
 ]
@@ -4832,22 +4858,22 @@ dependencies = [
 [[package]]
 name = "tang-gpu"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbb08edc2c436d7261562a42b6d257215cbf9d31ea4ec4d97fd9c58d7eb65812"
 dependencies = [
  "bytemuck",
- "libloading 0.8.9",
  "pollster",
  "safetensors",
  "tang",
- "tang-compile",
- "tang-expr",
- "wgpu 25.0.2",
+ "tang-expr 0.1.1",
+ "wgpu 24.0.5",
 ]
 
 [[package]]
 name = "tang-la"
 version = "0.1.1"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a1cf961cd2968a09fb079624db1eae07390acbe238fe61f075555b5302009d"
 dependencies = [
  "tang",
 ]
@@ -4855,7 +4881,8 @@ dependencies = [
 [[package]]
 name = "tang-mesh"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2033230b4d10b01448a6929b034ccc566a5b4b526219e15ff879cd4d150fc7b2"
 dependencies = [
  "futures-util",
  "iroh",
@@ -4864,7 +4891,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-gpu",
  "tang-tensor",
  "tarpc",
@@ -4877,7 +4904,8 @@ dependencies = [
 [[package]]
 name = "tang-optim"
 version = "0.1.1"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8611ed6ffd0d7f627cb8c2c93bcc9923038888f8401574396bf450ce51d7143"
 dependencies = [
  "tang",
  "tang-ad",
@@ -4887,7 +4915,8 @@ dependencies = [
 [[package]]
 name = "tang-safetensors"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db9cfa769a6a6c65eed48d2db47ab587815b18673d2618a0fc267e4ac2e1f5ae"
 dependencies = [
  "safetensors",
  "serde_json",
@@ -4899,7 +4928,8 @@ dependencies = [
 [[package]]
 name = "tang-tensor"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f251895b91826650fbcc68f39b8f7d76a62c88af88418582460a3aa686b436b8"
 dependencies = [
  "tang",
  "tang-la",
@@ -4908,7 +4938,8 @@ dependencies = [
 [[package]]
 name = "tang-train"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd#bfc8003b08d29a2bb1f62b00c771d59a2d9fc3bd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe0c5ee63dd1cfeb75a9f2fbadbc8b4399f1b755b2e04031a4f8c77520a82d97"
 dependencies = [
  "tang",
  "tang-ad",
@@ -5758,6 +5789,32 @@ dependencies = [
 
 [[package]]
 name = "wgpu"
+version = "24.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b0b3436f0729f6cdf2e6e9201f3d39dc95813fad61d826c1ed07918b4539353"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.11.0",
+ "cfg_aliases 0.2.1",
+ "document-features",
+ "js-sys",
+ "log",
+ "naga 24.0.0",
+ "parking_lot",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu-core 24.0.5",
+ "wgpu-hal 24.0.4",
+ "wgpu-types 24.0.0",
+]
+
+[[package]]
+name = "wgpu"
 version = "25.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec8fb398f119472be4d80bc3647339f56eb63b2a331f6a3d16e25d8144197dd9"
@@ -5807,6 +5864,31 @@ dependencies = [
  "thiserror 1.0.69",
  "wgpu-hal 23.0.1",
  "wgpu-types 23.0.0",
+]
+
+[[package]]
+name = "wgpu-core"
+version = "24.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f0aa306497a238d169b9dc70659105b4a096859a34894544ca81719242e1499"
+dependencies = [
+ "arrayvec",
+ "bit-vec",
+ "bitflags 2.11.0",
+ "cfg_aliases 0.2.1",
+ "document-features",
+ "indexmap",
+ "log",
+ "naga 24.0.0",
+ "once_cell",
+ "parking_lot",
+ "profiling",
+ "raw-window-handle",
+ "rustc-hash 1.1.0",
+ "smallvec",
+ "thiserror 2.0.18",
+ "wgpu-hal 24.0.4",
+ "wgpu-types 24.0.0",
 ]
 
 [[package]]
@@ -5914,6 +5996,52 @@ dependencies = [
 
 [[package]]
 name = "wgpu-hal"
+version = "24.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f112f464674ca69f3533248508ee30cb84c67cf06c25ff6800685f5e0294e259"
+dependencies = [
+ "android_system_properties",
+ "arrayvec",
+ "ash",
+ "bit-set",
+ "bitflags 2.11.0",
+ "block",
+ "bytemuck",
+ "cfg_aliases 0.2.1",
+ "core-graphics-types",
+ "glow 0.16.0",
+ "glutin_wgl_sys",
+ "gpu-alloc",
+ "gpu-allocator",
+ "gpu-descriptor",
+ "js-sys",
+ "khronos-egl",
+ "libc",
+ "libloading 0.8.9",
+ "log",
+ "metal 0.31.0",
+ "naga 24.0.0",
+ "ndk-sys",
+ "objc",
+ "once_cell",
+ "ordered-float 4.6.0",
+ "parking_lot",
+ "profiling",
+ "range-alloc",
+ "raw-window-handle",
+ "renderdoc-sys",
+ "rustc-hash 1.1.0",
+ "smallvec",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu-types 24.0.0",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
+]
+
+[[package]]
+name = "wgpu-hal"
 version = "25.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f968767fe4d3d33747bbd1473ccd55bf0f6451f55d733b5597e67b5deab4ad17"
@@ -5967,6 +6095,18 @@ checksum = "610f6ff27778148c31093f3b03abc4840f9636d58d597ca2f5977433acfe0068"
 dependencies = [
  "bitflags 2.11.0",
  "js-sys",
+ "web-sys",
+]
+
+[[package]]
+name = "wgpu-types"
+version = "24.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50ac044c0e76c03a0378e7786ac505d010a873665e2d51383dcff8dd227dc69c"
+dependencies = [
+ "bitflags 2.11.0",
+ "js-sys",
+ "log",
  "web-sys",
 ]
 

@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Hamiltonian lattice gauge theory on simplicial complexes"
-# depends on unpublished tang-mesh via the optional `mesh` feature
+# depends on tang-mesh via the optional `mesh` feature
 publish = false
 readme = "README.md"
 
