@@ -41,7 +41,10 @@ fn gains(name: &str) -> (f64, f64, f64, f64) {
 
 #[test]
 fn g1_stands_five_seconds_as_a_stiff_pd_statue() {
-    let path = format!("{}/../../models/unitree_g1/g1_23dof.xml", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/../../models/unitree_g1/g1_23dof.xml",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let mut model = MjcfLoader::from_file(&path).unwrap().build_model();
     model.dt = 0.002;
     let mut state = model.default_state();
@@ -49,7 +52,6 @@ fn g1_stands_five_seconds_as_a_stiff_pd_statue() {
         .joints
         .iter()
         .enumerate()
-        
         .filter(|(_, j)| j.name != "floating_base_joint")
         .map(|(i, j)| (model.q_offsets[i], model.v_offsets[i], gains(&j.name)))
         .collect();
@@ -59,14 +61,22 @@ fn g1_stands_five_seconds_as_a_stiff_pd_statue() {
     }
     // Free q = [wx,wy,wz,x,y,z]; lower the base so knees-bent soles touch.
     state.q[5] -= 0.04;
-    let gain: f64 = std::env::var("G1_GAIN").ok().and_then(|s| s.parse().ok()).unwrap_or(10.0);
+    let gain: f64 = std::env::var("G1_GAIN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
     let sim = Simulator::new();
-    let mat = ContactMaterial { stiffness: 1.0e5, damping: 2.0e3, friction: 0.8, ..Default::default() };
+    let mat = ContactMaterial {
+        stiffness: 1.0e5,
+        damping: 2.0e3,
+        friction: 0.8,
+        ..Default::default()
+    };
     let steps = (5.0 / model.dt) as usize;
     let mut settled = None;
     let (mut min_z, mut max_tilt) = (f64::INFINITY, 0.0f64);
     for k in 0..steps {
-                for (a, &(qi, vi, (q0, kp, kd, lim))) in hinges.iter().enumerate() {
+        for (a, &(qi, vi, (q0, kp, kd, lim))) in hinges.iter().enumerate() {
             let tau = gain * kp * (q0 - state.q[qi]) - gain.sqrt() * kd * state.v[vi];
             state.ctrl[a] = tau.clamp(-lim, lim);
         }
