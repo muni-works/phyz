@@ -155,6 +155,39 @@ pub struct StepImpulseArgs {
     pub sweeps: u32,
     /// Steps fused into this launch.
     pub nsteps: u32,
+    /// Whether to run the latency PD actuator ([`crate::latency_pd`]) each step.
+    pub has_lat: u32,
+}
+
+/// The latency PD actuator's device buffers, as a launch sees them. On a
+/// launch with the actuator off every field is a placeholder the kernel
+/// never dereferences.
+pub struct LatBufs<'a, B: KernelBackend + ?Sized> {
+    /// Ring sizes, step period and the per-joint table.
+    pub tab: &'a B::Buffer,
+    /// Per-world gains, friction, push and pin.
+    pub par: &'a B::Buffer,
+    /// Per-world latencies, reset step and step counter (written).
+    pub ipar: &'a mut B::Buffer,
+    /// q history ring (written).
+    pub qring: &'a mut B::Buffer,
+    /// v history ring (written).
+    pub vring: &'a mut B::Buffer,
+    /// Published targets, one slot per control period.
+    pub tring: &'a B::Buffer,
+    /// Mean torque over the period (written).
+    pub tau: &'a mut B::Buffer,
+}
+
+/// Scalar arguments of the latency PD and its readout.
+#[derive(Debug, Clone, Copy)]
+pub struct LatArgs {
+    /// Worlds.
+    pub nworld: u32,
+    /// `q` width per world.
+    pub nq: u32,
+    /// `v` width per world.
+    pub nv: u32,
 }
 
 /// Scalar arguments of the integration pass.
@@ -455,9 +488,35 @@ pub trait KernelBackend {
         _ext_forces: &mut Self::Buffer,
         _contact_state: &mut Self::Buffer,
         _sweep_stats: &mut Self::Buffer,
+        _lat: LatBufs<'_, Self>,
     ) -> Result<(), String> {
         Err("this backend has no fused impulse step".into())
     }
+
+    /// Latency PD actuator pass: `nworld` threads (see `lat_pd_thread`).
+    fn launch_lat_pd(
+        &self,
+        args: LatArgs,
+        lat: LatBufs<'_, Self>,
+        q: &mut Self::Buffer,
+        v: &mut Self::Buffer,
+        ctrl: &mut Self::Buffer,
+    ) -> Result<(), String>;
+
+    /// Latency PD readout: `nworld` threads (see `lat_gather_thread`).
+    #[allow(clippy::too_many_arguments)]
+    fn launch_lat_gather(
+        &self,
+        args: LatArgs,
+        tab: &Self::Buffer,
+        ipar: &Self::Buffer,
+        qring: &Self::Buffer,
+        vring: &Self::Buffer,
+        tau: &Self::Buffer,
+        q: &Self::Buffer,
+        v: &Self::Buffer,
+        out: &mut Self::Buffer,
+    ) -> Result<(), String>;
 
     /// FK readout pass: `nworld` threads, `XF_STRIDE` floats per body.
     fn launch_fk(
@@ -535,6 +594,25 @@ struct PdPass<B: KernelBackend> {
     /// Set by `enable_policy` when the spec declares a torque channel.
     /// Nothing else writes `tau_ff`, so it is the single switch.
     has_tau: bool,
+}
+
+struct LatPass<B: KernelBackend> {
+    spec: crate::latency_pd::LatencyPdSpec,
+    tab: B::Buffer,
+    par: B::Buffer,
+    ipar: B::Buffer,
+    qring: B::Buffer,
+    vring: B::Buffer,
+    tring: B::Buffer,
+    tau: B::Buffer,
+    /// One period's targets, staged for the device-side copy into `tring`.
+    tstage: B::Buffer,
+    out: B::Buffer,
+    /// Host mirror of the device step counter `G` (all worlds share it).
+    g: u32,
+    /// Per world: reset step `G0` and the latencies (act, pd lag, obs).
+    g0: Vec<u32>,
+    lats: Vec<[u32; 3]>,
 }
 
 struct PolicyPass<B: KernelBackend> {
@@ -639,6 +717,11 @@ pub struct BatchSim<B: KernelBackend> {
     sweep_stats: B::Buffer,
     contact: Option<ContactPass<B>>,
     pd: Option<PdPass<B>>,
+    /// The latency PD actuator, once enabled ([`BatchSim::enable_latency_pd`]).
+    lat: Option<LatPass<B>>,
+    /// One-float scratch handed to the fused step for the actuator's written
+    /// buffers while it is off.
+    lat_ph: [B::Buffer; 4],
     /// FK readout buffer, `[nworld][nbodies][XF_STRIDE]`.
     kin: Option<B::Buffer>,
     policy: Option<PolicyPass<B>>,
@@ -802,6 +885,12 @@ impl<B: KernelBackend> BatchSim<B> {
         let contact_state = backend.alloc((nworld * nb * CONTACT_STATE_STRIDE).max(1))?;
         let mut sweep_stats = backend.alloc((2 * nworld).max(1))?;
         backend.upload(&mut sweep_stats, &vec![0.0f32; (2 * nworld).max(1)])?;
+        let lat_ph = [
+            backend.alloc(1)?,
+            backend.alloc(1)?,
+            backend.alloc(1)?,
+            backend.alloc(1)?,
+        ];
         Ok(Self {
             backend,
             model,
@@ -816,6 +905,8 @@ impl<B: KernelBackend> BatchSim<B> {
             sweep_stats,
             contact: None,
             pd: None,
+            lat: None,
+            lat_ph,
             kin: None,
             policy: None,
             history: None,
@@ -1408,6 +1499,143 @@ impl<B: KernelBackend> BatchSim<B> {
         Ok(())
     }
 
+    /// Enable the latency PD actuator ([`crate::latency_pd`]). It replaces
+    /// the plain PD pass for its joints — enable one or the other. Every
+    /// world starts with zero latencies and gains, reset at the current step.
+    pub fn enable_latency_pd(
+        &mut self,
+        spec: crate::latency_pd::LatencyPdSpec,
+    ) -> Result<(), String> {
+        let (nq, nv, n) = (self.model.nq, self.model.nv, self.nworld);
+        spec.check(nq, nv)?;
+        if self.pd.is_some() {
+            return Err("enable_latency_pd: the plain PD pass is on; use one actuator".into());
+        }
+        let b = &self.backend;
+        let zeros = |len: usize| -> Result<B::Buffer, String> {
+            let mut x = b.alloc(len.max(1))?;
+            b.upload(&mut x, &vec![0.0f32; len.max(1)])?;
+            Ok(x)
+        };
+        let tab_data = spec.pack_table();
+        let mut tab = b.alloc(tab_data.len())?;
+        b.upload(&mut tab, &tab_data)?;
+        let nj = spec.nj();
+        let g = self.lat.as_ref().map_or(0, |l| l.g);
+        self.lat = Some(LatPass {
+            tab,
+            par: zeros(n * spec.par_stride())?,
+            ipar: zeros(n * 5)?,
+            qring: zeros(spec.ring * n * nq)?,
+            vring: zeros(spec.ring * n * nv)?,
+            tring: zeros(spec.target_ring * n * nj)?,
+            tau: zeros(n * nj)?,
+            tstage: zeros(n * nj)?,
+            out: zeros(n * spec.readout_stride(nq, nv))?,
+            g,
+            g0: vec![g; n],
+            lats: vec![[0; 3]; n],
+            spec,
+        });
+        self.invalidate_graph();
+        Ok(())
+    }
+
+    /// The latency actuator's spec, once enabled.
+    pub fn latency_spec(&self) -> Option<&crate::latency_pd::LatencyPdSpec> {
+        self.lat.as_ref().map(|l| &l.spec)
+    }
+
+    /// The global physics step `G` (all worlds share it): steps run since
+    /// the actuator was enabled.
+    pub fn latency_step(&self) -> Option<u32> {
+        self.lat.as_ref().map(|l| l.g)
+    }
+
+    /// Mark `worlds` as reset now: their `G0` becomes the current step.
+    /// Takes effect with the next [`Self::set_latency_params`].
+    pub fn latency_reset(&mut self, worlds: &[usize]) -> Result<(), String> {
+        let l = self.lat.as_mut().ok_or("latency PD not enabled")?;
+        for &w in worlds {
+            l.g0[w] = l.g;
+        }
+        Ok(())
+    }
+
+    /// Per-world parameters for the coming control period: `par` is
+    /// `nworld` rows of [`crate::latency_pd::LatencyPdSpec::par_stride`]
+    /// floats, `lat` each world's latencies. Uploaded whole (with every
+    /// world's `G0` and the step counter) — cheap next to a period of physics.
+    pub fn set_latency_params(
+        &mut self,
+        par: &[f32],
+        lat: &[crate::latency_pd::WorldLatency],
+    ) -> Result<(), String> {
+        let n = self.nworld;
+        let l = self.lat.as_mut().ok_or("latency PD not enabled")?;
+        if par.len() != n * l.spec.par_stride() || lat.len() != n {
+            return Err("set_latency_params: wrong length".into());
+        }
+        let u = f32::from_bits;
+        let mut ipar = Vec::with_capacity(n * 5);
+        for (w, x) in lat.iter().enumerate() {
+            l.lats[w] = [x.act, x.pd_lag, x.obs];
+            ipar.extend([u(x.act), u(x.pd_lag), u(l.g0[w]), u(l.g), u(x.obs)]);
+        }
+        self.backend.upload(&mut l.par, par)?;
+        self.backend.upload(&mut l.ipar, &ipar)
+    }
+
+    /// Publish this control period's targets (`nworld × nj`). Must be called
+    /// on a period boundary (`G` a multiple of `sub`).
+    pub fn publish_latency_targets(&mut self, targets: &[f32]) -> Result<(), String> {
+        let n = self.nworld;
+        let l = self.lat.as_mut().ok_or("latency PD not enabled")?;
+        let (nj, sub) = (l.spec.nj(), l.spec.sub as u32);
+        if targets.len() != n * nj {
+            return Err("publish_latency_targets: wrong length".into());
+        }
+        if l.g % sub != 0 {
+            return Err(format!(
+                "publish_latency_targets: step {} is mid-period (sub {sub})",
+                l.g
+            ));
+        }
+        let slot = (l.g / sub) as usize % l.spec.target_ring;
+        // Stage, then a device-side copy into the slot: no host sync.
+        self.backend.upload(&mut l.tstage, targets)?;
+        self.backend.copy(&l.tstage, &mut l.tring, slot * n * nj)
+    }
+
+    /// Whether world `w`'s readout carries a delayed state this period
+    /// (`obs > 0` and at least one step since its reset).
+    pub fn latency_has_delayed(&self, w: usize) -> bool {
+        self.lat
+            .as_ref()
+            .is_some_and(|l| l.lats[w][2].min(l.g - l.g0[w]) > 0)
+    }
+
+    /// After a control period: per world, `q[nq] v[nv] tau_mean[nj] |
+    /// delayed q,v | last-step q,v` ([`crate::latency_pd`]). One launch, one
+    /// device-to-host copy.
+    pub fn latency_readout(&mut self) -> Result<Vec<f32>, String> {
+        let (nq, nv) = (self.model.nq as u32, self.model.nv as u32);
+        let nworld = self.nworld as u32;
+        let l = self.lat.as_mut().ok_or("latency PD not enabled")?;
+        self.backend.launch_lat_gather(
+            LatArgs { nworld, nq, nv },
+            &l.tab,
+            &l.ipar,
+            &l.qring,
+            &l.vring,
+            &l.tau,
+            &self.q,
+            &self.v,
+            &mut l.out,
+        )?;
+        self.backend.download(&l.out)
+    }
+
     /// Upload per-environment position targets for the PD servos.
     pub fn set_position_targets(&mut self, targets: &[Vec<f64>]) -> Result<(), String> {
         let pd = self
@@ -1489,6 +1717,14 @@ impl<B: KernelBackend> BatchSim<B> {
     /// bit-identical on replay: the graph replays the same kernels on the
     /// same addresses with the same arguments.
     pub fn step_many(&mut self, n: usize) -> Result<(), String> {
+        self.step_many_inner(n)?;
+        if let Some(l) = &mut self.lat {
+            l.g += n as u32;
+        }
+        Ok(())
+    }
+
+    fn step_many_inner(&mut self, n: usize) -> Result<(), String> {
         if n == 0 {
             return Ok(());
         }
@@ -1569,6 +1805,7 @@ impl<B: KernelBackend> BatchSim<B> {
             gz: m.gravity.z as f32,
             sweeps: self.impulse_sweeps() as u32,
             nsteps: n as u32,
+            has_lat: u32::from(self.lat.is_some()),
         };
         let c = self.contact.as_ref().expect("fused step needs contact");
         // Unused when `has_pd` is 0; the kernel never reads them, and the
@@ -1577,6 +1814,31 @@ impl<B: KernelBackend> BatchSim<B> {
         let (pd_dofs, targets, tau_ff) = match &self.pd {
             Some(pd) => (&pd.dofs, &pd.targets, &pd.tau_ff),
             None => (&self.bodies, &self.bodies, &self.bodies),
+        };
+        // Placeholders when the actuator is off: `sweep_stats`-sized scratch
+        // the kernel never touches (`has_lat` is 0).
+        let lat = match &mut self.lat {
+            Some(l) => LatBufs::<B> {
+                tab: &l.tab,
+                par: &l.par,
+                ipar: &mut l.ipar,
+                qring: &mut l.qring,
+                vring: &mut l.vring,
+                tring: &l.tring,
+                tau: &mut l.tau,
+            },
+            None => {
+                let [a, b, c, d] = &mut self.lat_ph;
+                LatBufs::<B> {
+                    tab: &self.bodies,
+                    par: &self.bodies,
+                    ipar: a,
+                    qring: b,
+                    vring: c,
+                    tring: &self.bodies,
+                    tau: d,
+                }
+            }
         };
         census::kernel();
         self.backend.launch_step_impulse(
@@ -1595,6 +1857,7 @@ impl<B: KernelBackend> BatchSim<B> {
             &mut self.ext_forces,
             &mut self.contact_state,
             &mut self.sweep_stats,
+            lat,
         )
     }
 
@@ -1622,6 +1885,27 @@ impl<B: KernelBackend> BatchSim<B> {
                 &self.v,
                 &pd.targets,
                 &pd.tau_ff,
+                &mut self.ctrl,
+            )?;
+        }
+        if let Some(l) = &mut self.lat {
+            self.backend.launch_lat_pd(
+                LatArgs {
+                    nworld,
+                    nq: m.nq as u32,
+                    nv,
+                },
+                LatBufs::<B> {
+                    tab: &l.tab,
+                    par: &l.par,
+                    ipar: &mut l.ipar,
+                    qring: &mut l.qring,
+                    vring: &mut l.vring,
+                    tring: &l.tring,
+                    tau: &mut l.tau,
+                },
+                &mut self.q,
+                &mut self.v,
                 &mut self.ctrl,
             )?;
         }

@@ -540,6 +540,124 @@ PHYZ_DEV void pd_thread(u32 idx, u32 nworld, u32 nq, u32 nv, u32 n_dofs,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Pass -1b: latency PD actuator. One thread per world, once per physics step,
+// in place of the plain PD pass — the actuator law an RL plant with sensing
+// and command latency needs (contract: `src/latency_pd.rs`):
+//
+//   * the state at the start of step G goes into a q/v history ring (slot
+//     G mod R) that the PD lag and the delayed observation read;
+//   * the PD target is the one published for the control period containing
+//     G - act_lat, or the default pose while G - act_lat < G0 (G0 = the
+//     world's reset step);
+//   * the PD reads the state at max(G - pd_lag, G0) from the ring;
+//   * tau = kp (target - q) - kd v, Coulomb joint friction subtracted, effort
+//     clamp, in double; written to ctrl with every other DOF zeroed;
+//   * a per-world base push (torque on v[0..3], force on v[3..6]);
+//   * an optional gantry pin (base held, zero velocity);
+//   * tau / sub accumulated into the period's mean torque.
+//
+// Layouts (f32 buffers; "u" = u32 bit pattern):
+//   tab   [0]=R u [1]=Rp u [2]=sub u [3]=NJ u, then NJ x {q_idx u, v_idx u,
+//         default, effort}
+//   par   [nworld][3*NJ + 13]: kp[NJ] kd[NJ] jfric[NJ] push_f[3] push_t[3]
+//         pin_flag pin_q[6]
+//   ipar  [nworld][LAT_IPAR]: act_lat u, pd_lag u, G0 u, G u, obs_lat u
+//   qring [R][nworld][nq], vring [R][nworld][nv], tring [Rp][nworld][NJ]
+//   tau   [nworld][NJ]
+// G advances by one per call; the control period of step G is G / sub.
+// ═══════════════════════════════════════════════════════════════════════════
+#define LAT_IPAR 5u
+#define LAT_TAB_HDR 4u
+
+PHYZ_DEV void lat_pd_thread(u32 w, u32 nworld, u32 nq, u32 nv,
+                            const float* tab, const float* par, float* ipar,
+                            float* qring, float* vring, const float* tring,
+                            float* tau_avg, float* q, float* v, float* ctrl) {
+    if (w >= nworld) return;
+    u32 R = f_as_u(tab[0]), Rp = f_as_u(tab[1]), sub = f_as_u(tab[2]), NJ = f_as_u(tab[3]);
+    const float* jt = tab + LAT_TAB_HDR;
+    const float* P = par + w * (3u * NJ + 13u);
+    float* I = ipar + w * LAT_IPAR;
+    u32 act_lat = f_as_u(I[0]), lag = f_as_u(I[1]), G0 = f_as_u(I[2]), G = f_as_u(I[3]);
+    if (P[3u * NJ + 6u] != 0.0f) {
+        float* qm = q + w * nq;
+        float* vm = v + w * nv;
+        for (u32 i = 0; i < 6u; i++) { qm[i] = P[3u * NJ + 7u + i]; vm[i] = 0.0f; }
+    }
+    u32 slot = G % R;
+    float* qr = qring + (slot * nworld + w) * nq;
+    float* vr = vring + (slot * nworld + w) * nv;
+    for (u32 i = 0; i < nq; i++) qr[i] = q[w * nq + i];
+    for (u32 i = 0; i < nv; i++) vr[i] = v[w * nv + i];
+    // Signed: G - act_lat is negative early in a run.
+    long long j = (long long)G - (long long)act_lat;
+    bool live = j >= (long long)G0;
+    const float* tg = tring + (((live ? (u32)j / sub : 0u) % Rp) * nworld + w) * NJ;
+    long long jd = (long long)G - (long long)lag;
+    if (jd < (long long)G0) jd = (long long)G0;
+    u32 ds = (u32)jd % R;
+    const float* pq = qring + (ds * nworld + w) * nq;
+    const float* pv = vring + (ds * nworld + w) * nv;
+    float* cw = ctrl + w * nv;
+    for (u32 i = 0; i < nv; i++) cw[i] = 0.0f;
+    bool first = (G % sub) == 0u;
+    for (u32 k = 0; k < NJ; k++) {
+        const float* d = jt + k * 4u;
+        u32 qi = f_as_u(d[0]), vi = f_as_u(d[1]);
+        double tgt = live ? (double)tg[k] : (double)d[2];
+        double kp = P[k], kd = P[NJ + k], jf = P[2u * NJ + k];
+        double tau = kp * (tgt - (double)pq[qi]) - kd * (double)pv[vi];
+        double s = tau < 0.0 ? -1.0 : 1.0;
+        double at = tau < 0.0 ? -tau : tau;
+        tau -= (jf < at ? jf : at) * s;
+        double e = d[3];
+        if (tau > e) tau = e;
+        if (tau < -e) tau = -e;
+        cw[vi] = (float)tau;
+        float* ta = tau_avg + w * NJ + k;
+        *ta = (first ? 0.0f : *ta) + (float)(tau / (double)sub);
+    }
+    for (u32 a = 0; a < 3u; a++) {
+        cw[a] += P[3u * NJ + 3u + a];
+        cw[3u + a] += P[3u * NJ + a];
+    }
+    I[3] = u_as_f(G + 1u);
+}
+
+// Readout after a control period. One thread per world; out[w] is
+//   q[nq] v[nv] tau_avg[NJ] | delayed q,v | last q,v
+// where "delayed" is the state at G - min(G - G0, obs_lat) (left untouched
+// when that is G itself) and "last" the state at the start of step G - 1.
+PHYZ_DEV void lat_gather_thread(u32 w, u32 nworld, u32 nq, u32 nv,
+                                const float* tab, const float* ipar,
+                                const float* qring, const float* vring,
+                                const float* tau_avg, const float* q, const float* v,
+                                float* out) {
+    if (w >= nworld) return;
+    u32 R = f_as_u(tab[0]), NJ = f_as_u(tab[3]);
+    const float* I = ipar + w * LAT_IPAR;
+    u32 G0 = f_as_u(I[2]), G = f_as_u(I[3]), obs_lat = f_as_u(I[4]);
+    float* o = out + w * (3u * (nq + nv) + NJ);
+    for (u32 i = 0; i < nq; i++) o[i] = q[w * nq + i];
+    for (u32 i = 0; i < nv; i++) o[nq + i] = v[w * nv + i];
+    for (u32 k = 0; k < NJ; k++) o[nq + nv + k] = tau_avg[w * NJ + k];
+    float* od = o + nq + nv + NJ;
+    float* ol = od + nq + nv;
+    u32 n = G - G0;
+    u32 m = n < obs_lat ? n : obs_lat;
+    if (m > 0u) {
+        u32 s = (G - m) % R;
+        for (u32 i = 0; i < nq; i++) od[i] = qring[(s * nworld + w) * nq + i];
+        for (u32 i = 0; i < nv; i++) od[nq + i] = vring[(s * nworld + w) * nv + i];
+    }
+    if (G > 0u) {
+        u32 s = (G - 1u) % R;
+        for (u32 i = 0; i < nq; i++) ol[i] = qring[(s * nworld + w) * nq + i];
+        for (u32 i = 0; i < nv; i++) ol[nq + i] = vring[(s * nworld + w) * nv + i];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Pass 0: FK + contact. One thread per world.
 //
 // A hand port of CONTACT_GROUND_SHADER in shaders.rs — read that file for
@@ -2274,7 +2392,10 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
                                   const float* cparams, const float* bodies,
                                   const float* geometry, const float* hf_heights,
                                   float* q, float* v, float* ctrl, float* qdd,
-                                  float* ext_forces, float* contact_state, float* sweep_stats) {
+                                  float* ext_forces, float* contact_state, float* sweep_stats,
+                                  u32 has_lat, const float* lat_tab, const float* lat_par,
+                                  float* lat_ipar, float* lat_qring, float* lat_vring,
+                                  const float* lat_tring, float* lat_tau) {
     if (world_idx >= nworld) return;
     aba_cache_t kc;
     fk_cache_t fc;
@@ -2284,6 +2405,9 @@ PHYZ_DEV void step_impulse_thread(u32 world_idx, u32 nworld, u32 nq, u32 nv,
             for (u32 d = 0; d < n_dofs; d++)
                 pd_thread(world_idx * n_dofs + d, nworld, nq, nv, n_dofs,
                           pd_dofs, q, v, targets, tau_ff, has_tau, ctrl);
+        if (has_lat != 0u)
+            lat_pd_thread(world_idx, nworld, nq, nv, lat_tab, lat_par, lat_ipar,
+                          lat_qring, lat_vring, lat_tring, lat_tau, q, v, ctrl);
 
         aba_thread_c(world_idx, nworld, nv, dt, nbodies, gx, gy, gz,
                      bodies, q, v, ctrl, qdd, ext_forces, &kc, PHYZ_ABA_BUILD);
@@ -2733,11 +2857,32 @@ extern "C" __global__ void phyz_step_impulse(u32 nworld, u32 nq, u32 nv, u32 n_d
                                             const float* cparams, const float* bodies,
                                             const float* geometry, const float* hf_heights,
                                             float* q, float* v, float* ctrl, float* qdd,
-                                            float* ext_forces, float* contact_state, float* sweep_stats) {
+                                            float* ext_forces, float* contact_state, float* sweep_stats,
+                                            u32 has_lat, const float* lat_tab, const float* lat_par,
+                                            float* lat_ipar, float* lat_qring, float* lat_vring,
+                                            const float* lat_tring, float* lat_tau) {
     step_impulse_thread(blockIdx.x * blockDim.x + threadIdx.x, nworld, nq, nv, n_dofs,
                         has_pd, dt, nbodies, gx, gy, gz, sweeps, nsteps,
                         pd_dofs, targets, tau_ff, has_tau, cparams, bodies, geometry,
-                        hf_heights, q, v, ctrl, qdd, ext_forces, contact_state, sweep_stats);
+                        hf_heights, q, v, ctrl, qdd, ext_forces, contact_state, sweep_stats,
+                        has_lat, lat_tab, lat_par, lat_ipar, lat_qring, lat_vring, lat_tring, lat_tau);
+}
+
+extern "C" __global__ void phyz_lat_pd(u32 nworld, u32 nq, u32 nv,
+                                       const float* tab, const float* par, float* ipar,
+                                       float* qring, float* vring, const float* tring,
+                                       float* tau_avg, float* q, float* v, float* ctrl) {
+    lat_pd_thread(blockIdx.x * blockDim.x + threadIdx.x, nworld, nq, nv, tab, par, ipar,
+                  qring, vring, tring, tau_avg, q, v, ctrl);
+}
+
+extern "C" __global__ void phyz_lat_gather(u32 nworld, u32 nq, u32 nv,
+                                           const float* tab, const float* ipar,
+                                           const float* qring, const float* vring,
+                                           const float* tau_avg, const float* q, const float* v,
+                                           float* out) {
+    lat_gather_thread(blockIdx.x * blockDim.x + threadIdx.x, nworld, nq, nv, tab, ipar,
+                      qring, vring, tau_avg, q, v, out);
 }
 
 #define PHYZ_ABA_ENTRY(NAME, MODE)                                              \
@@ -2843,12 +2988,33 @@ extern "C" void phyz_host_step_impulse(u32 n_threads, u32 nworld, u32 nq, u32 nv
                                       const float* cparams, const float* bodies,
                                       const float* geometry, const float* hf_heights,
                                       float* q, float* v, float* ctrl, float* qdd,
-                                      float* ext_forces, float* contact_state, float* sweep_stats) {
+                                      float* ext_forces, float* contact_state, float* sweep_stats,
+                                      u32 has_lat, const float* lat_tab, const float* lat_par,
+                                      float* lat_ipar, float* lat_qring, float* lat_vring,
+                                      const float* lat_tring, float* lat_tau) {
     for (u32 t = 0; t < n_threads; t++)
         step_impulse_thread(t, nworld, nq, nv, n_dofs, has_pd, dt, nbodies, gx, gy, gz,
                             sweeps, nsteps, pd_dofs, targets, tau_ff, has_tau, cparams,
                             bodies, geometry, hf_heights, q, v, ctrl, qdd, ext_forces,
-                            contact_state, sweep_stats);
+                            contact_state, sweep_stats, has_lat, lat_tab, lat_par, lat_ipar,
+                            lat_qring, lat_vring, lat_tring, lat_tau);
+}
+
+extern "C" void phyz_host_lat_pd(u32 n_threads, u32 nworld, u32 nq, u32 nv,
+                                 const float* tab, const float* par, float* ipar,
+                                 float* qring, float* vring, const float* tring,
+                                 float* tau_avg, float* q, float* v, float* ctrl) {
+    for (u32 t = 0; t < n_threads; t++)
+        lat_pd_thread(t, nworld, nq, nv, tab, par, ipar, qring, vring, tring, tau_avg, q, v, ctrl);
+}
+
+extern "C" void phyz_host_lat_gather(u32 n_threads, u32 nworld, u32 nq, u32 nv,
+                                     const float* tab, const float* ipar,
+                                     const float* qring, const float* vring,
+                                     const float* tau_avg, const float* q, const float* v,
+                                     float* out) {
+    for (u32 t = 0; t < n_threads; t++)
+        lat_gather_thread(t, nworld, nq, nv, tab, ipar, qring, vring, tau_avg, q, v, out);
 }
 
 extern "C" void phyz_host_aba_c(u32 n_threads, u32 nworld, u32 nv, float dt, u32 nbodies,
