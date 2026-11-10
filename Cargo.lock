@@ -3073,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "phyz"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "phyz-collision",
@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-bench"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "phyz",
@@ -3108,7 +3108,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-camera"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bytemuck",
  "phyz-collision",
@@ -3124,7 +3124,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-collision"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3132,7 +3132,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-compile"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "naga 23.1.0",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-contact"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-collision",
  "phyz-math",
@@ -3152,7 +3152,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-coupling"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "phyz-em",
@@ -3164,22 +3164,26 @@ dependencies = [
 
 [[package]]
 name = "phyz-diff"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
+ "bytemuck",
  "criterion",
+ "libloading 0.8.9",
  "phyz-collision",
  "phyz-contact",
  "phyz-math",
  "phyz-model",
  "phyz-rigid",
+ "phyz-urdf",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
+ "tang-gpu",
  "tang-la",
 ]
 
 [[package]]
 name = "phyz-dream"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3188,7 +3192,7 @@ dependencies = [
  "serde_json",
  "tang",
  "tang-compute",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-safetensors",
  "tang-tensor",
  "tang-train",
@@ -3196,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-em"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "phyz-math",
@@ -3204,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-env"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-gpu",
  "phyz-math",
@@ -3217,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-examples"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz",
  "phyz-collision",
@@ -3246,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-format"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-mjcf",
@@ -3260,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-gpu"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "bytemuck",
@@ -3281,14 +3285,14 @@ dependencies = [
 
 [[package]]
 name = "phyz-gravity"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
 ]
 
 [[package]]
 name = "phyz-guardian"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3297,7 +3301,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-home"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
@@ -3310,14 +3314,14 @@ dependencies = [
 
 [[package]]
 name = "phyz-lbm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
 ]
 
 [[package]]
 name = "phyz-loop"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3327,7 +3331,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-math"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "libm",
  "proptest",
@@ -3337,7 +3341,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-md"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "phyz-math",
@@ -3349,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-mjcf"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3360,14 +3364,14 @@ dependencies = [
 
 [[package]]
 name = "phyz-model"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
 ]
 
 [[package]]
 name = "phyz-particle"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3375,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-prob"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3385,16 +3389,16 @@ dependencies = [
 
 [[package]]
 name = "phyz-qft"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
- "phyz-math",
  "rand 0.8.5",
+ "rayon",
 ]
 
 [[package]]
 name = "phyz-quantum"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bytemuck",
  "num-complex",
@@ -3405,7 +3409,7 @@ dependencies = [
  "rand 0.8.5",
  "serde_json",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-la",
  "tang-mesh",
  "ureq",
@@ -3414,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-real2sim"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-diff",
  "phyz-format",
@@ -3427,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-regge"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "phyz-math",
@@ -3437,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-rigid"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3445,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-urdf"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
  "phyz-model",
@@ -3456,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-validate"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-em",
  "phyz-gravity",
@@ -3469,23 +3473,25 @@ dependencies = [
 
 [[package]]
 name = "phyz-vbd"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
 ]
 
 [[package]]
 name = "phyz-wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
+ "phyz-contact",
  "phyz-diff",
  "phyz-math",
  "phyz-model",
  "phyz-quantum",
  "phyz-regge",
  "phyz-rigid",
+ "phyz-xpbd",
  "serde",
  "serde_json",
  "wasm-bindgen",
@@ -3495,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-world"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-collision",
  "phyz-math",
@@ -3508,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "phyz-xpbd"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "phyz-math",
 ]
@@ -4803,16 +4809,18 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tang"
-version = "0.2.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01222e2be85bd48a1b129975a3b4045f425adaceb6ecda6e7a97cdb8dd96a75a"
 dependencies = [
  "paste",
 ]
 
 [[package]]
 name = "tang-ad"
-version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67759a0059717e6704887054248a7aa765fb9ba12ab803233be8cb3b3dfbcce"
 dependencies = [
  "tang",
  "tang-la",
@@ -4821,17 +4829,28 @@ dependencies = [
 [[package]]
 name = "tang-compute"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcad39db55491d6e0cd80bc58ed9b96c5996601bf76f7a101b601ba1d85cd4b9"
 dependencies = [
  "bytemuck",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
 ]
 
 [[package]]
 name = "tang-expr"
-version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f1fdb85a4a0335eb38eac4635d080d54f2cb093e66ef54ce0c5460d35457e90"
+dependencies = [
+ "tang",
+]
+
+[[package]]
+name = "tang-expr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df8225e37bd9287d3d4a32423bbce42cc2de20ff6e12a199072f8b105c717e71"
 dependencies = [
  "tang",
 ]
@@ -4839,20 +4858,22 @@ dependencies = [
 [[package]]
 name = "tang-gpu"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbb08edc2c436d7261562a42b6d257215cbf9d31ea4ec4d97fd9c58d7eb65812"
 dependencies = [
  "bytemuck",
  "pollster",
  "safetensors",
  "tang",
- "tang-expr",
+ "tang-expr 0.1.1",
  "wgpu 24.0.5",
 ]
 
 [[package]]
 name = "tang-la"
-version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a1cf961cd2968a09fb079624db1eae07390acbe238fe61f075555b5302009d"
 dependencies = [
  "tang",
 ]
@@ -4860,7 +4881,8 @@ dependencies = [
 [[package]]
 name = "tang-mesh"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2033230b4d10b01448a6929b034ccc566a5b4b526219e15ff879cd4d150fc7b2"
 dependencies = [
  "futures-util",
  "iroh",
@@ -4869,7 +4891,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tang",
- "tang-expr",
+ "tang-expr 0.2.0",
  "tang-gpu",
  "tang-tensor",
  "tarpc",
@@ -4881,8 +4903,9 @@ dependencies = [
 
 [[package]]
 name = "tang-optim"
-version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8611ed6ffd0d7f627cb8c2c93bcc9923038888f8401574396bf450ce51d7143"
 dependencies = [
  "tang",
  "tang-ad",
@@ -4892,7 +4915,8 @@ dependencies = [
 [[package]]
 name = "tang-safetensors"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db9cfa769a6a6c65eed48d2db47ab587815b18673d2618a0fc267e4ac2e1f5ae"
 dependencies = [
  "safetensors",
  "serde_json",
@@ -4904,7 +4928,8 @@ dependencies = [
 [[package]]
 name = "tang-tensor"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f251895b91826650fbcc68f39b8f7d76a62c88af88418582460a3aa686b436b8"
 dependencies = [
  "tang",
  "tang-la",
@@ -4913,7 +4938,8 @@ dependencies = [
 [[package]]
 name = "tang-train"
 version = "0.1.0"
-source = "git+https://github.com/ecto/tang.git?rev=9d28b81067f1a416c73a9e84b7f4f9af29bbfa34#9d28b81067f1a416c73a9e84b7f4f9af29bbfa34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe0c5ee63dd1cfeb75a9f2fbadbc8b4399f1b755b2e04031a4f8c77520a82d97"
 dependencies = [
  "tang",
  "tang-ad",

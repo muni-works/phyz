@@ -43,8 +43,10 @@ fn every_orientation_spelling_is_honoured() {
         );
     }
 
-    // zaxis="1 0 0" maps +Z onto +X.
-    let z = rot_of("by_zaxis") * Vec3::new(0.0, 0.0, 1.0);
+    // zaxis="1 0 0": the body's +Z points along the parent's +X. phyz stores
+    // `rot = R_{child<-parent}` (same as phyz-urdf), so the body axis in parent
+    // coordinates is `rot^T * z`.
+    let z = rot_of("by_zaxis").transpose() * Vec3::new(0.0, 0.0, 1.0);
     assert!((z - Vec3::new(1.0, 0.0, 0.0)).norm() < 1e-9, "{z:?}");
 }
 

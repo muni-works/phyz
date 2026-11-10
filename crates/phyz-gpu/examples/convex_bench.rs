@@ -15,7 +15,9 @@
 
 use std::time::Instant;
 
-use phyz_contact::{ContactCoupling, ContactProblem, ContactRow, ContactSolverConfig, solve_contacts_warm};
+use phyz_contact::{
+    ContactCoupling, ContactProblem, ContactRow, ContactSolverConfig, solve_contacts_warm,
+};
 use phyz_gpu::cuda::convex::{ConvexBatch, ConvexCfg, ConvexRow, CudaConvex};
 use phyz_math::Vec3;
 
@@ -77,7 +79,14 @@ fn read(path: &str) -> Vec<Rec> {
                 n,
                 a,
                 b,
-                rows: r.chunks(3).map(|c| ConvexRow { mu: c[0], bias: c[1], impedance: c[2] }).collect(),
+                rows: r
+                    .chunks(3)
+                    .map(|c| ConvexRow {
+                        mu: c[0],
+                        bias: c[1],
+                        impedance: c[2],
+                    })
+                    .collect(),
                 seed: tri(&s),
                 want: tri(&w),
                 iters,
@@ -108,13 +117,22 @@ fn batch(recs: &[Rec], copies: usize, order: u32) -> ConvexBatch {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mut recs = read(args.get(1).expect("usage: convex_bench DUMP.bin [copies...]"));
+    let mut recs = read(
+        args.get(1)
+            .expect("usage: convex_bench DUMP.bin [copies...]"),
+    );
     // CVX_DROP_ABOVE=N: leave out problems the CPU needed more than N
     // iterations for — the launch time without the tail.
-    if let Some(cut) = std::env::var("CVX_DROP_ABOVE").ok().and_then(|v| v.parse::<u32>().ok()) {
+    if let Some(cut) = std::env::var("CVX_DROP_ABOVE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+    {
         let before = recs.len();
         recs.retain(|r| r.iters <= cut);
-        println!("CVX_DROP_ABOVE={cut}: kept {}/{before} problems", recs.len());
+        println!(
+            "CVX_DROP_ABOVE={cut}: kept {}/{before} problems",
+            recs.len()
+        );
     }
     let copies: Vec<usize> = if args.len() > 2 {
         args[2..].iter().map(|s| s.parse().unwrap()).collect()
@@ -138,7 +156,12 @@ fn main() {
     let (mut exact, mut worst, mut it_ok) = (0usize, 0.0f64, 0usize);
     for (p, r) in recs.iter().enumerate() {
         let got = b.impulses(p);
-        let scale = r.want.iter().flatten().fold(0.0f64, |m, x| m.max(x.abs())).max(1e-300);
+        let scale = r
+            .want
+            .iter()
+            .flatten()
+            .fold(0.0f64, |m, x| m.max(x.abs()))
+            .max(1e-300);
         let mut bits = true;
         for (g, w) in got.iter().flatten().zip(r.want.iter().flatten()) {
             if g.to_bits() != w.to_bits() {
@@ -166,7 +189,11 @@ fn main() {
         max_iterations: cfg.max_iterations as usize,
         newton: cfg.newton,
         mujoco_compat: cfg.mujoco_compat,
-        coupling: if cfg.block_diagonal { ContactCoupling::BlockDiagonal } else { ContactCoupling::Full },
+        coupling: if cfg.block_diagonal {
+            ContactCoupling::BlockDiagonal
+        } else {
+            ContactCoupling::Full
+        },
         no_stall_exit: cfg.no_stall_exit,
         ..ContactSolverConfig::simulation()
     };
@@ -176,10 +203,21 @@ fn main() {
             let rows = r
                 .rows
                 .iter()
-                .map(|x| ContactRow { mu: x.mu, bias: x.bias, impedance: x.impedance, ..ContactRow::default() })
+                .map(|x| ContactRow {
+                    mu: x.mu,
+                    bias: x.bias,
+                    impedance: x.impedance,
+                    ..ContactRow::default()
+                })
                 .collect();
             (
-                ContactProblem { n: r.n, delassus: r.a.clone(), free_velocity: r.b.clone(), rows, bodies: Vec::new() },
+                ContactProblem {
+                    n: r.n,
+                    delassus: r.a.clone(),
+                    free_velocity: r.b.clone(),
+                    rows,
+                    bodies: Vec::new(),
+                },
                 r.seed.iter().map(|s| Vec3::new(s[0], s[1], s[2])).collect(),
             )
         })
@@ -189,7 +227,10 @@ fn main() {
         std::hint::black_box(solve_contacts_warm(p, &cc, s));
     }
     let cpu = t.elapsed().as_secs_f64() / probs.len() as f64;
-    println!("cpu solve_contacts_warm: {:.2} us/solve (1 thread)", cpu * 1e6);
+    println!(
+        "cpu solve_contacts_warm: {:.2} us/solve (1 thread)",
+        cpu * 1e6
+    );
 
     // The tail: the CPU's iteration counts over the recorded set.
     let mut it: Vec<u32> = recs.iter().map(|r| r.iters).collect();
@@ -198,7 +239,11 @@ fn main() {
     let capped = it.iter().filter(|&&x| x >= cfg.max_iterations).count();
     println!(
         "iterations: p50 {} p90 {} p99 {} max {}; {capped} at the {} cap; mean {:.0}",
-        q(0.5), q(0.9), q(0.99), it[it.len() - 1], cfg.max_iterations,
+        q(0.5),
+        q(0.9),
+        q(0.99),
+        it[it.len() - 1],
+        cfg.max_iterations,
         it.iter().map(|&x| x as f64).sum::<f64>() / it.len() as f64
     );
 

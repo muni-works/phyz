@@ -41,7 +41,12 @@ fn rig() -> Model {
     let mut model = ModelBuilder::new()
         .gravity(Vec3::new(0.0, 0.0, -GRAVITY))
         .dt(0.001)
-        .add_body("base", -1, Joint::free(SpatialTransform::identity()), box_inertia(3.0, half))
+        .add_body(
+            "base",
+            -1,
+            Joint::free(SpatialTransform::identity()),
+            box_inertia(3.0, half),
+        )
         .add_body("link", 0, hinge(-0.2), box_inertia(1.0, half))
         .add_body("foot", 1, hinge(-0.2), box_inertia(0.5, half))
         .build();
@@ -79,7 +84,13 @@ fn spawn(model: &Model) -> State {
 
 fn pd(model: &Model) -> Vec<PdDof> {
     (6..model.nv)
-        .map(|i| PdDof { q_index: i, v_index: i, kp: 30.0, kd: 1.5, max_force: 40.0 })
+        .map(|i| PdDof {
+            q_index: i,
+            v_index: i,
+            kp: 30.0,
+            kd: 1.5,
+            max_force: 40.0,
+        })
         .collect()
 }
 
@@ -103,7 +114,8 @@ fn single(mode: StepMode, w: usize, terrain_on: bool) -> State {
     // batch has one gain table; DR here is mass, not contact stiffness).
     let g = BodyContactGains::uniform_frequency(&rig(), 250.0, 1.0);
     let hf = terrain_on.then(|| terrain(w));
-    sim.enable_contact_impulse(0.0, MU[w], &g, &[], hf.as_ref()).unwrap();
+    sim.enable_contact_impulse(0.0, MU[w], &g, &[], hf.as_ref())
+        .unwrap();
     sim.enable_pd_control(&pd(&m)).unwrap();
     sim.load_states(&[spawn(&m)]);
     sim.set_position_targets(&[vec![0.1, -0.2]]).unwrap();
@@ -119,7 +131,8 @@ fn batched(mode: StepMode, terrain_on: bool) -> Vec<State> {
     sim.set_step_mode(mode);
     let g = BodyContactGains::uniform_frequency(&base, 250.0, 1.0);
     let hf0 = terrain_on.then(|| terrain(0));
-    sim.enable_contact_impulse(0.0, 0.5, &g, &[], hf0.as_ref()).unwrap();
+    sim.enable_contact_impulse(0.0, 0.5, &g, &[], hf0.as_ref())
+        .unwrap();
     sim.enable_pd_control(&pd(&base)).unwrap();
     let models: Vec<Model> = (0..n).map(variant).collect();
     sim.set_world_models(&models).unwrap();
@@ -147,7 +160,11 @@ fn assert_bits(a: &State, b: &State, w: usize) {
 fn check(mode: StepMode, terrain_on: bool) {
     let b = batched(mode, terrain_on);
     // The worlds must actually differ, or the test proves nothing.
-    assert_ne!(b[0].q[5].to_bits(), b[3].q[5].to_bits(), "per-world data had no effect");
+    assert_ne!(
+        b[0].q[5].to_bits(),
+        b[3].q[5].to_bits(),
+        "per-world data had no effect"
+    );
     for w in 0..MU.len() {
         assert_bits(&b[w], &single(mode, w, terrain_on), w);
     }

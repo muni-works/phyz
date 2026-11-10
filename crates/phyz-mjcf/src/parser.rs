@@ -725,7 +725,7 @@ impl MjcfLoader {
                 .and_then(|p| body_map.get(&p).copied())
                 .unwrap_or(-1);
 
-            let parent_to_body = SpatialTransform::new(body.rot, body.pos);
+            let parent_to_body = SpatialTransform::new(body.rot.transpose(), body.pos);
 
             let inertia = self.body_inertia(body);
 
