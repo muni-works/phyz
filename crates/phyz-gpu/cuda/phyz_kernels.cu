@@ -2314,8 +2314,8 @@ PHYZ_DEV void integrate_thread(u32 idx, u32 nworld, u32 nv, float dt, u32 nbodie
     // (`rotate_free_joint_velocities`), both with the step's starting ω.
     // Without it the linear velocity takes a first-order turn that stretches
     // |v| by (|ω|dt)²/2 a step and drifts against the CPU reference.
-    float w0x = v[v_off], w0y = v[v_off + 1u], w0z = v[v_off + 2u];
     if (jtype != 0u && jtype != 1u && jtype != 3u) {
+        float w0x = v[v_off], w0y = v[v_off + 1u], w0z = v[v_off + 2u];
         float lx = v[v_off + 3u], ly = v[v_off + 4u], lz = v[v_off + 5u];
         float cx = w0y * lz - w0z * ly, cy = w0z * lx - w0x * lz, cz = w0x * ly - w0y * lx;
         for (u32 k = 0; k < 3u; k++) v[v_off + k] = v[v_off + k] + dt * qdd[v_off + k];
