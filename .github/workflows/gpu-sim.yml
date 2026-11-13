@@ -1,0 +1,83 @@
+name: gpu-sim
+
+# Optional, non-required check. The "CUDA kernels on the host" step in ci.yml
+# builds `--features cuda,cuda-host`, but with no NVIDIA driver on the runner
+# the `device` tests in cuda_vs_cpu.rs and train_parity.rs print `skipping`
+# and pass. This runs those tests on a simulated NVIDIA H100
+# (https://github.com/pantheongpu/pantheonsim), so the NVRTC-compiled kernels
+# actually execute and are compared with the f64 CPU. A simulator cannot
+# reproduce hardware-specific behaviour or timing, so it complements runs on a
+# real GPU and does not replace them.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/phyz-gpu/**'
+      - 'models/ant.xml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/gpu-sim.yml'
+
+concurrency:
+  group: gpu-sim-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cuda-device:
+    name: CUDA device tests on a simulated H100
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gpu-sim
+
+      # The toolkit supplies libnvrtc, which cudarc dlopens to compile
+      # cuda/*.cu at run time; the simulator supplies libcuda.
+      - name: Set up the simulated GPU and CUDA toolkit
+        uses: pantheongpu/setup-pantheonsim@68edfd58c091361dd6baf060b63de412e544d858 # v0.1.7
+        with:
+          gpu: nvidia/h100
+          cuda-toolkit: "13.0"
+
+      - name: Build the test binaries
+        run: cargo test -p phyz-gpu --features cuda,cuda-host --test cuda_vs_cpu --test train_parity --no-run
+
+      # Only the `device::` modules: the `host::` ones already run in ci.yml.
+      # The device tests print "skipping CUDA ..." or "no CUDA device" and
+      # return when no device or NVRTC is found, which would pass. Fail on
+      # that, and unless the CUDA batch simulator started in both cuda_vs_cpu
+      # tests and all five device tests passed.
+      - name: Run the CUDA device tests
+        run: |
+          export LD_LIBRARY_PATH="/usr/local/cuda-13.0/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          set -o pipefail
+          vgpu run cargo test -p phyz-gpu --features cuda,cuda-host \
+            --test cuda_vs_cpu --test train_parity -- device:: --nocapture 2>&1 | tee gpu-tests.log
+          if grep -E 'skipping CUDA|no CUDA device' gpu-tests.log; then
+            echo "::error::a CUDA test skipped: no usable device under the simulator"
+            exit 1
+          fi
+          if [ "$(grep -c '^running on CUDA' gpu-tests.log)" -ne 2 ]; then
+            echo "::error::the CUDA batch simulator did not start on the device"
+            exit 1
+          fi
+          passed=$(grep -oE 'test result: ok\. [0-9]+ passed' gpu-tests.log | awk '{s += $4} END {print s + 0}')
+          if [ "$passed" -ne 5 ]; then
+            echo "::error::expected 5 passing device tests, got $passed"
+            exit 1
+          fi
